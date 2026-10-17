@@ -46,6 +46,31 @@
     return data;
   }
 
+  // The order a carousel plays its items in: as listed, or shuffled every round without
+  // showing the same item twice in a row.
+  function playOrder(list, random, last) {
+    const order = list.map((x, i) => i);
+    if (!random || list.length < 2) return order;
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    if (order[0] === last) [order[0], order[1]] = [order[1], order[0]];
+    return order;
+  }
+
+  // A small label on carousels in the editor, which shows only the first item.
+  function badge(text) {
+    return el('div', 'carousel-badge', text);
+  }
+
+  const CAROUSEL_FX = {
+    fade: [{ opacity: 0 }, { opacity: 1 }],
+    'slide-left': [{ transform: 'translateX(100%)' }, { transform: 'translateX(0)' }],
+    'slide-up': [{ transform: 'translateY(100%)' }, { transform: 'translateY(0)' }],
+    zoom: [{ opacity: 0, transform: 'scale(1.08)' }, { opacity: 1, transform: 'scale(1)' }],
+  };
+
   function box(e) {
     const b = el('div', `el el-${e.type}`);
     Object.assign(b.style, {
@@ -117,9 +142,177 @@
       return { node: b, done };
     },
 
+    // Photo carousel: several images one after the other, in a set or random order.
+    slideshow(e, ctx) {
+      const b = box(e);
+      b.style.background = e.background || '#000';
+      const items = (e.sources || []).filter((x) => x.type === 'image');
+      if (!items.length) {
+        if (ctx.editor) b.appendChild(el('div', 'placeholder', 'Add photos to the carousel'));
+        return { node: b, done: null };
+      }
+      const img = (src) => { const i = el('img', `fill fit-${e.fit || 'cover'}`); i.src = src; return i; };
+      if (ctx.editor) {
+        b.append(img(items[0].src), badge(`Photo carousel · ${items.length} photo${items.length === 1 ? '' : 's'}${e.order === 'random' ? ' · random' : ''}`));
+        return { node: b, done: null };
+      }
+      const interval = Math.max(1, Number(e.interval) || 5) * 1000;
+      const fx = CAROUSEL_FX[e.transition || 'fade'];
+      const ms = e.transition === 'cut' ? 0 : Number(e.transitionMs ?? 800);
+      let stopped = false;
+      let finish;
+      const done = new Promise((resolve) => { finish = resolve; });
+      ctx.onHide.push(() => { stopped = true; finish(); });
+      if (ctx.signal) ctx.signal.addEventListener('abort', () => finish(), { once: true });
+      ctx.onShow.push(async () => {
+        let last = -1;
+        let first = true;
+        while (!stopped) {
+          for (const i of playOrder(items, e.order === 'random', last)) {
+            if (stopped) return;
+            const next = img(items[i].src);
+            await new Promise((r) => { if (next.complete) r(); else { next.onload = r; next.onerror = r; } });
+            const prev = b.lastElementChild;
+            b.appendChild(next);
+            if (!first && fx && ms) await next.animate(fx, { duration: ms, easing: 'ease-in-out' }).finished.catch(() => {});
+            if (prev && prev !== next) prev.remove();
+            first = false;
+            last = i;
+            await sleep(interval, ctx.signal);
+          }
+          finish(); // one full round played: a scene set to move on when its media ends can go on
+        }
+      });
+      return { node: b, done };
+    },
+
+    // Video carousel: several videos back to back, in a set or random order. Repeats until the scene ends.
+    playlist(e, ctx) {
+      const b = box(e);
+      b.style.background = '#000';
+      const items = (e.sources || []).filter((x) => x.type === 'video');
+      if (!items.length) {
+        if (ctx.editor) b.appendChild(el('div', 'placeholder', 'Add videos to the carousel'));
+        return { node: b, done: null };
+      }
+      const v = el('video', `fill fit-${e.fit || 'cover'}`);
+      v.playsInline = true;
+      v.preload = 'auto';
+      v.muted = ctx.editor || !e.audio;
+      b.appendChild(v);
+      if (ctx.editor) {
+        v.src = items[0].src;
+        v.currentTime = 1;
+        b.appendChild(badge(`Video carousel · ${items.length} video${items.length === 1 ? '' : 's'}${e.order === 'random' ? ' · random' : ''}`));
+        return { node: b, done: null };
+      }
+      let stopped = false;
+      let finish;
+      const done = new Promise((resolve) => { finish = resolve; });
+      if (ctx.signal) ctx.signal.addEventListener('abort', () => finish(), { once: true });
+      const playOne = (src) => new Promise((resolve) => {
+        const end = () => { v.removeEventListener('ended', end); v.removeEventListener('error', fail); resolve(); };
+        const fail = () => { v.removeEventListener('ended', end); v.removeEventListener('error', fail); setTimeout(resolve, 1000); };
+        v.addEventListener('ended', end);
+        v.addEventListener('error', fail);
+        v.src = src;
+        v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
+      });
+      ctx.onShow.push(async () => {
+        let last = -1;
+        while (!stopped) {
+          for (const i of playOrder(items, e.order === 'random', last)) {
+            if (stopped) return;
+            await playOne(items[i].src);
+            last = i;
+          }
+          finish();
+        }
+      });
+      ctx.onHide.push(() => { stopped = true; finish(); v.pause(); v.removeAttribute('src'); v.load(); });
+      return { node: b, done };
+    },
+
+    // A whole RSS feed with photos and text: as a list, a grid of cards, or one item at a time.
+    // Pages through the items when they do not all fit.
+    rss(e, ctx) {
+      const b = box(e);
+      b.style.background = e.background || 'transparent';
+      const wrap = el('div', `rss rss-${e.layout || 'list'}`);
+      Object.assign(wrap.style, { color: e.color || '#ffffff', fontFamily: e.fontFamily || '' });
+      wrap.style.setProperty('--rss-title', `${Number(e.fontSize) || 40}px`);
+      wrap.style.setProperty('--rss-card', e.cardBackground || 'rgba(0,0,0,0.45)');
+      wrap.style.setProperty('--rss-gap', `${Number(e.gap ?? 20)}px`);
+      b.appendChild(wrap);
+      if (!e.feedId) { if (ctx.editor) wrap.appendChild(el('div', 'placeholder', 'Choose a feed')); return { node: b, done: null }; }
+      const layout = e.layout || 'list';
+      const perPage = layout === 'single' ? 1 : Math.max(1, Number(e.perPage) || (layout === 'grid' ? 6 : 4));
+      if (layout === 'grid') wrap.style.gridTemplateColumns = `repeat(${Math.max(1, Number(e.columns) || 3)}, 1fr)`;
+      const card = (item) => {
+        const c = el('div', 'rss-item');
+        if (e.showImage !== false && item.image) {
+          const im = el('img', 'rss-img');
+          im.src = item.image;
+          im.onerror = () => im.remove();
+          c.appendChild(im);
+        }
+        const t = el('div', 'rss-text');
+        t.appendChild(el('div', 'rss-title', item.title || ''));
+        if (e.showDescription !== false && item.description) {
+          const d = el('div', 'rss-desc', item.description);
+          d.style.webkitLineClamp = String(Number(e.descLines) || (layout === 'single' ? 4 : 2));
+          t.appendChild(d);
+        }
+        if (e.showDate && item.date) t.appendChild(el('div', 'rss-date', fmtDate(ctx, new Date(item.date), { dateStyle: 'medium', timeStyle: 'short' })));
+        c.appendChild(t);
+        return c;
+      };
+      let finish;
+      const done = ctx.editor ? null : new Promise((resolve) => { finish = resolve; });
+      let stopped = false;
+      const load = async () => {
+        try {
+          const data = await feedItems(e.feedId);
+          const max = Number(e.maxItems);
+          return (data.items || []).slice(0, max > 0 ? max : undefined);
+        } catch { return []; }
+      };
+      const showPage = (items, page) => {
+        wrap.replaceChildren(...items.slice(page * perPage, page * perPage + perPage).map(card));
+        if (!ctx.editor && page > 0) wrap.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 600, easing: 'ease-out' });
+      };
+      if (ctx.editor) {
+        load().then((items) => {
+          if (!items.length) { wrap.replaceChildren(el('div', 'placeholder', 'No items in this feed yet')); return; }
+          showPage(items, 0);
+          const pages = Math.ceil(items.length / perPage);
+          if (pages > 1) b.appendChild(badge(`RSS · ${items.length} items · ${pages} pages`));
+        });
+        return { node: b, done: null };
+      }
+      if (ctx.signal) ctx.signal.addEventListener('abort', () => finish(), { once: true });
+      ctx.onHide.push(() => { stopped = true; finish(); });
+      ctx.onShow.push(async () => {
+        while (!stopped) {
+          const items = await load(); // re-read every round so new items show up
+          if (!items.length) { wrap.replaceChildren(); await sleep(5000, ctx.signal); continue; }
+          const pages = Math.ceil(items.length / perPage);
+          for (let page = 0; page < pages && !stopped; page++) {
+            showPage(items, page);
+            await sleep(Math.max(2, Number(e.interval) || 8) * 1000, ctx.signal);
+          }
+          finish();
+        }
+      });
+      // The first page is drawn right away so the scene does not start empty.
+      load().then((items) => { if (!wrap.children.length && items.length) showPage(items, 0); });
+      return { node: b, done };
+    },
+
     webpage(e, ctx) {
       const b = box(e);
       if (!e.url) { if (ctx.editor) b.appendChild(el('div', 'placeholder', 'No URL set')); return { node: b }; }
+      if (ctx.thumb) { b.appendChild(el('div', 'placeholder', 'Web page')); return { node: b }; }
       const f = el('iframe', 'fill');
       f.src = e.url;
       f.setAttribute('scrolling', 'no');
@@ -195,7 +388,7 @@
         if (e.source === 'feed' && e.feedId) {
           try {
             const data = await feedItems(e.feedId);
-            const list = (data.items || []).slice(0, Number(e.maxItems) || 15).map((i) => i.title).filter(Boolean);
+            const list = (data.items || []).slice(0, Number(e.maxItems) || undefined).map((i) => i.title).filter(Boolean);
             if (list.length) return list;
           } catch { /* fall back to static text */ }
         }

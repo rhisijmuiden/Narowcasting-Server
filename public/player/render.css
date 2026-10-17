@@ -21,3 +21,24 @@
 .tk-track { position: relative; flex: 1; height: 100%; overflow: hidden; }
 .tk-run { position: absolute; top: 50%; left: 0; transform: translate(100vw, -50%); white-space: nowrap; will-change: transform; }
 .tk-sep { opacity: .6; padding: 0 1em; }
+.el-slideshow img { position: absolute; inset: 0; }
+.carousel-badge { position: absolute; left: 12px; bottom: 12px; z-index: 5; padding: 6px 14px; border-radius: 999px; background: rgba(10,14,22,.78); color: #fff; font-size: 22px; font-weight: 600; letter-spacing: .01em; }
+.rss { position: absolute; inset: 0; display: flex; flex-direction: column; gap: var(--rss-gap); line-height: 1.2; }
+.rss-item { display: flex; gap: var(--rss-gap); background: var(--rss-card); border-radius: 12px; overflow: hidden; min-height: 0; }
+.rss-img { object-fit: cover; flex: none; display: block; }
+.rss-text { display: flex; flex-direction: column; justify-content: center; gap: .35em; padding: calc(var(--rss-gap) * .8); min-width: 0; }
+.rss-title { font-size: var(--rss-title); font-weight: 750; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.rss-desc { font-size: calc(var(--rss-title) * .6); opacity: .85; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.rss-date { font-size: calc(var(--rss-title) * .45); opacity: .65; }
+/* list: one row per item, photo on the left */
+.rss-list .rss-item { flex: 1; }
+.rss-list .rss-img { width: 32%; height: 100%; }
+/* grid: cards with the photo on top */
+.rss-grid { display: grid; grid-auto-rows: 1fr; }
+.rss-grid .rss-item { flex-direction: column; gap: 0; }
+.rss-grid .rss-img { width: 100%; height: 55%; }
+.rss-grid .rss-text { justify-content: flex-start; flex: 1; }
+/* single: one item at a time, photo filling the box with the text over it */
+.rss-single .rss-item { position: relative; flex: 1; border-radius: 0; background: none; }
+.rss-single .rss-img { position: absolute; inset: 0; width: 100%; height: 100%; }
+.rss-single .rss-text { position: absolute; left: 0; right: 0; bottom: 0; justify-content: flex-end; padding: calc(var(--rss-gap) * 2); background: linear-gradient(to top, rgba(0,0,0,.85), rgba(0,0,0,.4) 60%, transparent); }

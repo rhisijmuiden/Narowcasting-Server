@@ -125,6 +125,10 @@ function resolveElement(e) {
     out.src = m ? mediaUrl(m) : null;
     out.mediaType = m ? m.type : null;
   }
+  // Carousels: a list of media in the order the user set.
+  if (Array.isArray(e.items)) {
+    out.sources = e.items.map((id) => store.get('media', id)).filter(Boolean).map((m) => ({ id: m.id, src: mediaUrl(m), type: m.type }));
+  }
   return out;
 }
 
@@ -181,7 +185,7 @@ app.post('/api/player/render-slide', auth.requireAuth, (req, res) => {
 app.get('/api/player/feed/:id', playerAccess, wrap(async (req, res) => {
   const feed = store.get('feeds', req.params.id);
   if (!feed) return res.status(404).json({ error: 'Feed not found' });
-  res.json(await feeds.getItems(feed));
+  res.json(feeds.limit(feed, await feeds.getItems(feed)));
 }));
 
 app.get('/api/player/weather', playerAccess, wrap(async (req, res) => {
@@ -330,7 +334,7 @@ app.delete('/api/media/:id', (req, res) => {
 app.get('/api/feeds/:id/items', wrap(async (req, res) => {
   const feed = store.get('feeds', req.params.id);
   if (!feed) return res.status(404).json({ error: 'Feed not found' });
-  res.json(await feeds.getItems(feed, { force: req.query.force === '1' }));
+  res.json(feeds.limit(feed, await feeds.getItems(feed, { force: req.query.force === '1' })));
 }));
 
 // A full copy of a playout (scenes, overlays, ad blocks and music) under a new name.

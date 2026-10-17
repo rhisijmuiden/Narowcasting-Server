@@ -74,8 +74,15 @@ async function getItems(feed, { force = false } = {}) {
   return fetchFeed(feed);
 }
 
+// Only the number of items set on the feed (default 10) goes to scenes, tickers and RSS elements.
+const DEFAULT_ITEMS = 10;
+function limit(feed, entry) {
+  const max = Math.max(1, Number(feed.maxItems) || DEFAULT_ITEMS);
+  return { ...entry, items: (entry.items || []).slice(0, max), total: (entry.items || []).length };
+}
+
 function forget(feedId) {
   cache.delete(feedId);
 }
 
-module.exports = { getItems, forget };
+module.exports = { getItems, forget, limit, DEFAULT_ITEMS };
