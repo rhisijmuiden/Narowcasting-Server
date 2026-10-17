@@ -2,6 +2,14 @@
 
 All notable changes to Beeldkrant. The admin panel shows this file under the Info button.
 
+## 0.7.1 (2026-10-17)
+
+### Added
+- Installer for a Debian 13 machine, VM or VPS (`install/debian.sh`): installs everything without questions, with optional Intel or AMD VAAPI drivers, and prints the admin address and one-time password. Build My TV Station uses it to put Beeldkrant in a virtual machine.
+
+### Changed
+- The systemd unit of Beeldkrant now lives in `deploy/beeldkrant.service`, shared by both installers.
+
 ## 0.7.0 (2026-10-17)
 
 ### Added

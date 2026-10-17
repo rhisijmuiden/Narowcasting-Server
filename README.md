@@ -5,7 +5,7 @@ A narrowcasting "beeldkrant" (picture newspaper) generator. You build playouts o
 ![Dashboard with the stream on air, the live preview and the renderer log](docs/screenshots/dashboard.png)
 
 - Admin panel on port **8080**
-- Runs in a **Debian 13 LXC container** on Proxmox VE, installed with one command from the Proxmox shell
+- Runs in a **Debian 13 LXC container** on Proxmox VE, installed with one command from the Proxmox shell, or on a [Debian 13 machine or VM](#install-on-a-debian-13-machine-or-vm)
 - Everything (code, UI, docs) in English
 
 Contents: [Install](#install-on-proxmox-ve) · [Dashboard](#dashboard-and-statistics) · [Playouts](#playouts-and-scenes) · [Media](#media) · [Schedule](#schedule) · [Outputs](#outputs) · [Routing](#routing) · [Settings](#settings-and-your-account) · [Backups](#backups) · [Users and roles](#users-and-roles) · [Updating](#updating)
@@ -342,7 +342,19 @@ After 5 wrong passwords for a user from one address, sign-in is paused for 30 se
   <img src="docs/screenshots/account-mfa.png" alt="Your account: password, MFA and role" width="32%">
 </p>
 
-## Manual install (any Debian 13 machine)
+## Install on a Debian 13 machine or VM
+
+To run Beeldkrant on a minimal Debian 13 machine, a VM or a VPS instead of an LXC container, run this as root:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/rhisijmuiden/TV-Channel-Generator/main/install/debian.sh)"
+```
+
+Without curl, use `wget -qO-` instead of `curl -fsSL`. The installer asks nothing: it installs the packages (Chromium, ffmpeg, Xvfb, PulseAudio, fonts and Debian's Node.js), Beeldkrant in `/opt/beeldkrant` with its data in `/var/lib/beeldkrant`, the systemd service and the `update` command, and prints the admin address and the one-time password at the end. Running it again on an installed machine runs `update`.
+
+Settings: `PORT=<port>` changes the panel port, `BEELDKRANT_REF=<branch>` installs another branch, and `GPU=intel`, `GPU=amd` or `GPU=none` chooses the VAAPI drivers for hardware encoding (by default the installer looks for a GPU passed through to the machine). NVIDIA is only supported in the LXC container for now.
+
+By hand, without the installer:
 
 ```bash
 apt install -y git ffmpeg chromium xvfb pulseaudio fonts-dejavu fonts-noto-color-emoji nodejs npm
@@ -370,6 +382,8 @@ Environment variables:
 ```
 ct/beeldkrant.sh               Proxmox host script (creates the LXC)
 install/beeldkrant-install.sh  Runs inside the container
+install/debian.sh              Installer for a Debian 13 machine or VM
+deploy/                        systemd units for Beeldkrant and for updates started from the panel
 scripts/update.sh              The `update` command inside the container
 server/                        Node.js server: API, auth, schedule, feeds, stream pipelines, outputs, IP cameras
 docs/screenshots/              Screenshots used in this README
