@@ -41,31 +41,8 @@ chown -R beeldkrant:beeldkrant /opt/beeldkrant
 msg_ok "Installed Beeldkrant"
 
 msg_info "Creating Service"
-cat <<SERVICE >/etc/systemd/system/beeldkrant.service
-[Unit]
-Description=Beeldkrant narrowcasting generator
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=beeldkrant
-Group=beeldkrant
-WorkingDirectory=/opt/beeldkrant
-Environment=NODE_ENV=production
-Environment=PORT=8080
-Environment=DATA_DIR=/var/lib/beeldkrant
-Environment=CHROMIUM_PATH=/usr/bin/chromium
-EnvironmentFile=-/etc/default/beeldkrant
-ExecStart=/usr/bin/node /opt/beeldkrant/server/index.js
-Restart=always
-RestartSec=5
-KillMode=mixed
-TimeoutStopSec=15
-
-[Install]
-WantedBy=multi-user.target
-SERVICE
+install -m 0644 /opt/beeldkrant/deploy/beeldkrant.service /etc/systemd/system/beeldkrant.service
+systemctl daemon-reload
 systemctl enable -q --now beeldkrant
 msg_ok "Created Service"
 
