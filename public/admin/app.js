@@ -112,6 +112,60 @@
     });
   }
 
+  // ---------- software update ----------
+  async function updateBanner(main) {
+    try {
+      const u = await GET('/api/system/update');
+      if (!u.available) return;
+      main.prepend(h('div', { class: 'update-banner' },
+        h('span', null, h('b', null, 'A new version of Beeldkrant is available.'), ` You run ${u.commit.slice(0, 7)}, the latest is ${u.latest.slice(0, 7)}.`),
+        u.canUpdate ? h('button', { class: 'primary small', onclick: () => runUpdate(u) }, 'Update now') : h('span', { class: 'muted' }, 'Run update in the container shell.')));
+    } catch { /* not important enough to show an error */ }
+  }
+
+  // Starts the update and follows it until the restarted server runs the new version.
+  async function runUpdate(before) {
+    const logBox = h('div', { class: 'logs', style: { height: '220px' } }, 'Starting update…');
+    const statusLine = h('p', null, 'Beeldkrant is updating. The stream pauses briefly while the service restarts.');
+    let closeModal = () => {};
+    let stopped = false;
+    closeModal = modal('Updating Beeldkrant', h('div', { class: 'stack' }, statusLine, logBox), (close) => [h('button', { onclick: () => { stopped = true; close(); } }, 'Close')]);
+    try { await POST('/api/system/update'); } catch (err) { fail(err); closeModal(); return; }
+    const started = Date.now();
+    while (!stopped && Date.now() - started < 15 * 60 * 1000) {
+      await new Promise((r) => setTimeout(r, 2000));
+      let u;
+      try { u = await GET('/api/system/update'); } catch { statusLine.textContent = 'Restarting Beeldkrant…'; continue; }
+      if (u.log) { logBox.textContent = u.log; logBox.scrollTop = logBox.scrollHeight; }
+      if (u.commit && u.commit !== before.commit) {
+        toast('Beeldkrant is updated', 'ok');
+        setTimeout(() => location.reload(), 1200);
+        return;
+      }
+      if (!u.requested && /already up to date|✖/.test(u.log || '') && Date.now() - started > 4000) {
+        statusLine.textContent = /✖/.test(u.log) ? 'The update failed. See the log below.' : 'Beeldkrant is already up to date.';
+        return;
+      }
+    }
+  }
+
+  async function updateCard() {
+    const box = h('div', { class: 'card stack' });
+    const draw = (u) => put(box,
+      h('h2', null, 'Software update'),
+      h('div', null, 'Version ', h('b', null, u.version || '?'), u.commit ? h('span', { class: 'muted' }, ` (${u.commit.slice(0, 7)}, branch ${u.branch})`) : null),
+      u.error ? h('div', { class: 'badge err' }, u.error)
+        : u.available ? h('div', { class: 'badge warn' }, `New version available: ${u.latest.slice(0, 7)}`)
+          : u.checkedAt ? h('div', { class: 'badge ok' }, 'Up to date') : null,
+      h('div', { class: 'hint' }, u.checkedAt ? `Last checked ${new Date(u.checkedAt).toLocaleString()}. Checked automatically once a day.` : 'Checked automatically once a day.'),
+      h('div', { class: 'row' },
+        h('button', { onclick: async () => { try { draw(await POST('/api/system/update/check')); } catch (err) { fail(err); } } }, 'Check now'),
+        u.canUpdate ? h('button', { class: u.available ? 'primary' : '', onclick: () => runUpdate(u) }, u.available ? 'Update now' : 'Reinstall latest') : null),
+      u.canUpdate ? null : h('div', { class: 'hint' }, 'Updating from the panel works on an installed container. You can always run update in the container shell.'));
+    try { draw(await GET('/api/system/update')); } catch (err) { put(box, h('h2', null, 'Software update'), h('div', { class: 'badge err' }, err.message)); }
+    return box;
+  }
+
   // ---------- routing ----------
   const NAV = [
     ['dashboard', 'Dashboard'],
@@ -143,6 +197,7 @@
         h('a', { href: '#', onclick: async (e) => { e.preventDefault(); await POST('/api/logout'); me = null; route(); } }, 'Log out'),
       ),
       main));
+    if (me.user.role === 'admin') updateBanner(main);
     const pages = { dashboard: pageDashboard, playouts: pagePlayouts, media: pageMedia, feeds: pageFeeds, schedule: pageSchedule, output: pageOutput, settings: pageSettings };
     try { await (pages[page] || pageDashboard)(main); } catch (err) { fail(err); }
   }
@@ -1117,7 +1172,8 @@
           field('Time zone', bind(data, 'timezone', () => {}, 'text', { placeholder: 'Europe/Amsterdam' }), { hint: 'Used by the schedule, clocks and dates.' }),
           field('Language for dates', bind(data, 'locale', () => {}, 'select', { options: [['en-GB', 'English (UK)'], ['en-US', 'English (US)'], ['nl-NL', 'Dutch'], ['de-DE', 'German'], ['fr-FR', 'French']] })),
           h('button', { class: 'primary', onclick: async () => { try { await PUT('/api/settings', data); toast('Saved', 'ok'); } catch (err) { fail(err); } } }, 'Save')),
-        h('div', { class: 'card stack' }, h('h2', null, 'Change password'), renderChangePassword(false))));
+        h('div', { class: 'card stack' }, h('h2', null, 'Change password'), renderChangePassword(false)),
+        me.user.role === 'admin' ? await updateCard() : null));
   }
 
   route();

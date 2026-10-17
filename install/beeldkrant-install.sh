@@ -56,6 +56,7 @@ Environment=NODE_ENV=production
 Environment=PORT=8080
 Environment=DATA_DIR=/var/lib/beeldkrant
 Environment=CHROMIUM_PATH=/usr/bin/chromium
+EnvironmentFile=-/etc/default/beeldkrant
 ExecStart=/usr/bin/node /opt/beeldkrant/server/index.js
 Restart=always
 RestartSec=5
@@ -70,4 +71,13 @@ msg_ok "Created Service"
 
 motd_ssh
 customize
+
+# Our own `update` command (replaces the generic one customize() writes): updates Beeldkrant in place.
+install -m 0755 /opt/beeldkrant/scripts/update.sh /usr/bin/update
+# Lets the admin panel start that same update.
+install -m 0644 /opt/beeldkrant/deploy/beeldkrant-update.path /opt/beeldkrant/deploy/beeldkrant-update.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable -q --now beeldkrant-update.path
+[[ "$BEELDKRANT_REF" != "main" ]] && echo "BEELDKRANT_REF=$BEELDKRANT_REF" >/etc/default/beeldkrant
+
 cleanup_lxc

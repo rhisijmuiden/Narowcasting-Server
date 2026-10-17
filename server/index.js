@@ -11,6 +11,7 @@ const feeds = require('./feeds');
 const weather = require('./weather');
 const schedule = require('./schedule');
 const stream = require('./stream');
+const updater = require('./updater');
 const pkg = require('../package.json');
 
 const PORT = Number(process.env.PORT) || 8080;
@@ -333,6 +334,14 @@ app.post('/api/stream/start', wrap(async (req, res) => { await stream.start(); r
 app.post('/api/stream/stop', wrap(async (req, res) => { await stream.stop(); res.json(stream.status()); }));
 app.post('/api/stream/restart', wrap(async (req, res) => { await stream.restart(); res.json(stream.status()); }));
 
+// Software updates (admins only)
+app.get('/api/system/update', wrap(async (req, res) => res.json(await updater.status())));
+app.post('/api/system/update/check', auth.requireRole('admin'), wrap(async (req, res) => res.json(await updater.check())));
+app.post('/api/system/update', auth.requireRole('admin'), wrap(async (req, res) => {
+  updater.requestUpdate();
+  res.json(await updater.status());
+}));
+
 // ---------- admin UI ----------
 app.use('/admin', express.static(path.join(PUBLIC, 'admin')));
 app.get('/', (req, res) => res.redirect('/admin/'));
@@ -344,6 +353,7 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, HOST, () => {
   console.log(`Beeldkrant ${pkg.version} admin panel on http://${HOST}:${PORT}/admin/`);
+  updater.start();
   if (store.getSection('output').enabled) {
     stream.start().catch((err) => console.error('Could not resume stream:', err.message));
   }
