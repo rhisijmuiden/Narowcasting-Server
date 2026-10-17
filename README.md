@@ -8,7 +8,7 @@ A narrowcasting "beeldkrant" (picture newspaper) generator. You build playouts o
 - Runs in a **Debian 13 LXC container** on Proxmox VE, installed with one command from the Proxmox shell
 - Everything (code, UI, docs) in English
 
-Contents: [Install](#install-on-proxmox-ve) · [Dashboard](#dashboard-and-statistics) · [Playouts](#playouts-and-scenes) · [Media](#media) · [Schedule](#schedule) · [Outputs](#outputs) · [Routing](#routing) · [Settings](#settings-and-your-account) · [Backups](#backups) · [Updating](#updating)
+Contents: [Install](#install-on-proxmox-ve) · [Dashboard](#dashboard-and-statistics) · [Playouts](#playouts-and-scenes) · [Media](#media) · [Schedule](#schedule) · [Outputs](#outputs) · [Routing](#routing) · [Settings](#settings-and-your-account) · [Backups](#backups) · [Users and roles](#users-and-roles) · [Updating](#updating)
 
 ## Install on Proxmox VE
 
@@ -263,7 +263,7 @@ A typical setup sends the schedule to YouTube, Facebook and your own server, and
 
 ## Settings and your account
 
-Under *Settings → Application* you rename the panel (shown in the menu, on the login page and in the browser tab) and, as an admin, set the server address and the web port. A new port takes effect right away and the panel moves you there; it is stored in the database and wins over the `PORT` the service starts with. Each user picks a light or dark theme, or *Auto* to follow the device, with the switch at the bottom of the menu; your name at the bottom opens your account (theme and password).
+Under *Settings → Application* you rename the panel (shown in the menu, on the login page and in the browser tab) and, as an admin, set the server address and the web port. A new port takes effect right away and the panel moves you there; it is stored in the database and wins over the `PORT` the service starts with. Each user picks a light or dark theme, or *Auto* to follow the device, with the switch at the bottom of the menu; your name at the bottom opens your account (theme, password, MFA and your role).
 
 <p>
   <img src="docs/screenshots/settings-application.png" alt="Settings: application name, server address, port and region" width="49%">
@@ -272,7 +272,7 @@ Under *Settings → Application* you rename the panel (shown in the menu, on the
 
 ## Backups
 
-Under *Settings → Backups* (admins only):
+Under *Settings → Backups* (admins, and users with the *Backups and restore* permission):
 
 - **What to back up**: the application (program code, without installed packages), the database (playouts, scenes, schedule, feeds, media list and folders, users and settings) and the media (all files in all folders). Put everything in one archive, or make a separate archive per part so the large media stays apart.
 - **Schedule**: automatic backups on chosen days at a set time (in the time zone from *Settings*), plus a *Back up now* button.
@@ -287,11 +287,60 @@ Backups are named `beeldkrant_<date>_<time>_<parts>.tar.gz` and kept in `/var/li
   <img src="docs/screenshots/backups-restore-dialog.png" alt="Restoring a backup, choosing the parts" width="49%">
 </p>
 
-## Users
+## Users and roles
 
 <img src="docs/screenshots/login.png" alt="Login page" width="49%">
 
-On first start Beeldkrant creates the user `admin` with a random one-time password (shown by the installer and kept in `DATA_DIR/initial-admin-password` until it is changed). Accounts carry a role (`admin`, `editor`, `viewer`); a user management screen for creating more accounts is planned.
+On first start Beeldkrant creates the user `admin` with a random one-time password (shown by the installer and kept in `DATA_DIR/initial-admin-password` until it is changed).
+
+Under *Settings → Users and roles* (admins only) you add, edit, disable and remove users. Every user has one of three roles:
+
+- **Admin** can do everything, including users, SSO, security and backups.
+- **User** can only change the parts you switch on for that person: *Playouts and scenes*, *Media, RSS feeds, input streams and IP cameras*, *Schedule*, *Outputs, routing and starting or stopping the stream*, *Application settings* and *Backups and restore*. Everything else is visible but read only.
+- **Read only** can look at everything in the system but change nothing (a banner says so); only their own theme, password and MFA.
+
+Beeldkrant always keeps at least one admin, and you cannot demote or remove yourself. Accounts from older versions are moved over automatically: `editor` becomes *User* with everything except settings and backups, `viewer` becomes *Read only*.
+
+![Users and roles: role overview and the list of users](docs/screenshots/users.png)
+<p>
+  <img src="docs/screenshots/users-edit.png" alt="Editing a user: role, permissions, sign-in method and MFA" width="49%">
+  <img src="docs/screenshots/readonly-playouts.png" alt="A read-only user sees everything but cannot change anything" width="49%">
+</p>
+
+### Microsoft Entra SSO
+
+*Settings → Users and roles → Configure SSO* connects Beeldkrant to Microsoft Entra ID (OpenID Connect with PKCE):
+
+1. In the Entra admin center, register an app (*App registrations → New registration*) with the redirect URI shown on the page (type *Web*), for example `https://beeldkrant.example.com/api/sso/callback`.
+2. Create a client secret and copy the tenant ID, the application (client) ID and the secret into Beeldkrant.
+3. Optional: give the app the *Microsoft Graph → User.Read.All* application permission (with admin consent) to search the directory and add people from Entra.
+4. Optional: define app roles (for example `Beeldkrant.Admin`) and fill them in under *Role mapping*; the role is then taken from Entra at every sign-in.
+5. *Test configuration* checks the tenant, the secret and Graph, then switch SSO on.
+
+The login page then shows *Sign in with Microsoft*. Per user you choose the sign-in method, *Password* or *Microsoft Entra SSO*. With *Create users on first sign-in* on, anyone in your tenant who signs in gets an account with the default role (*Read only* unless you pick another); otherwise only users you added can sign in. *Add from Entra* on the users page searches the directory and creates SSO accounts in one go.
+
+![Configure SSO: tenant, app, redirect URI, test, provisioning and role mapping](docs/screenshots/sso-config.png)
+<p>
+  <img src="docs/screenshots/users-entra-import.png" alt="Adding users from the Entra directory" width="49%">
+  <img src="docs/screenshots/login-sso.png" alt="Login page with Sign in with Microsoft" width="49%">
+</p>
+<img src="docs/screenshots/users-add-sso.png" alt="Adding a user with Microsoft Entra SSO as the sign-in method" width="49%">
+
+### Security: MFA and password policy
+
+Under *Settings → Security* (admins only):
+
+- **MFA**: per user, switch on whether a second step is required, or use *Require for everyone* / *Require for admins*. A user who must use MFA sets it up at the next sign-in with an authenticator app (Microsoft Authenticator, Google Authenticator and similar, TOTP) by scanning a QR code, and gets 8 one-time recovery codes. Anyone can also turn MFA on under their account. *Reset* removes a user's authenticator, for example after a lost phone. For SSO users, MFA is set in Entra (Conditional Access). Keep at least one admin with a password, so you can still sign in if Microsoft sign-in stops working.
+- **Password policy**: the minimum length, whether a special character and/or upper and lower case letters are needed, and after how many days a password expires (0 = never). An expired password must be changed at the next sign-in. The policy does not apply to users who sign in with Microsoft Entra SSO; their password is managed by Microsoft.
+
+After 5 wrong passwords for a user from one address, sign-in is paused for 30 seconds, doubling with each further attempt.
+
+![Security: MFA per user and the password policy](docs/screenshots/security.png)
+<p>
+  <img src="docs/screenshots/login-mfa-setup.png" alt="Setting up MFA at sign-in with a QR code" width="32%">
+  <img src="docs/screenshots/login-mfa-codes.png" alt="Recovery codes after setting up MFA" width="32%">
+  <img src="docs/screenshots/account-mfa.png" alt="Your account: password, MFA and role" width="32%">
+</p>
 
 ## Manual install (any Debian 13 machine)
 

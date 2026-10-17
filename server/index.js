@@ -17,7 +17,9 @@ const stats = require('./stats');
 const outputs = require('./outputs');
 const providers = require('./providers');
 const cameras = require('./cameras');
+const sso = require('./sso');
 const http = require('http');
+const QRCode = require('qrcode');
 const pkg = require('../package.json');
 
 // The port set under Settings → Application wins over the PORT the service starts with.
@@ -87,16 +89,68 @@ function thumbnail(file, out) {
 // ---------- auth ----------
 auth.bootstrap();
 
+// Brute-force brake: a few wrong passwords per address and user name, then a pause.
+const failures = new Map(); // key -> { count, until }
+function throttled(key) {
+  const f = failures.get(key);
+  return f && f.until > Date.now() ? Math.ceil((f.until - Date.now()) / 1000) : 0;
+}
+function failed(key) {
+  const f = failures.get(key) || { count: 0, until: 0 };
+  f.count += 1;
+  if (f.count >= 5) { f.until = Date.now() + Math.min(15 * 60, 30 * 2 ** (f.count - 5)) * 1000; }
+  failures.set(key, f);
+}
+
+// What the login page offers.
+app.get('/api/auth/options', (req, res) => {
+  const c = sso.config();
+  res.json({ sso: sso.ready(c) ? { label: c.buttonLabel || 'Sign in with Microsoft' } : null, panelName: store.getSection('settings').panelName });
+});
+
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
+  const key = `${req.socket.remoteAddress}|${String(username || '').toLowerCase()}`;
+  const wait = throttled(key);
+  if (wait) return res.status(429).json({ error: `Too many attempts. Try again in ${wait} s.` });
+  const known = auth.findByName(username || '');
+  if (known && known.authMethod === 'sso') return res.status(400).json({ error: 'This account signs in with Microsoft. Use the Microsoft button.' });
   const user = auth.verify(username || '', password || '');
-  if (!user) return res.status(401).json({ error: 'Wrong username or password' });
-  auth.login(res, user);
-  res.json({ ok: true, user: auth.publicUser(user) });
+  if (!user) { failed(key); return res.status(401).json({ error: 'Wrong username or password' }); }
+  failures.delete(key);
+  if (user.disabled) return res.status(403).json({ error: 'This account is disabled' });
+  res.json(auth.startLogin(res, user));
 });
+// Second step: the code from the authenticator app (or a recovery code).
+app.post('/api/login/mfa', (req, res) => {
+  const { ticket, code } = req.body || {};
+  try { res.json(auth.secondStep(res, ticket, code)); } catch (err) { res.status(err.status || 400).json({ error: err.message }); }
+});
+// The QR code for setting up an authenticator app.
+app.get('/api/qr', wrap(async (req, res) => {
+  const text = String(req.query.text || '');
+  if (!text.startsWith('otpauth://totp/') || text.length > 400) return res.status(400).json({ error: 'Not an authenticator link' });
+  res.type('image/svg+xml').set('Cache-Control', 'no-store').send(await QRCode.toString(text, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }));
+}));
+
+// Microsoft Entra sign-in.
+app.get('/api/sso/start', (req, res) => {
+  try { res.redirect(sso.startUrl(req)); } catch (err) { res.redirect(`/admin/?sso_error=${encodeURIComponent(err.message)}`); }
+});
+app.get('/api/sso/callback', wrap(async (req, res) => {
+  try {
+    const user = await sso.callback(req);
+    auth.finishLogin(res, user);
+    res.redirect('/admin/');
+  } catch (err) {
+    console.error('Microsoft sign-in failed:', err.message);
+    res.redirect(`/admin/?sso_error=${encodeURIComponent(err.message)}`);
+  }
+}));
+
 app.post('/api/logout', (req, res) => { auth.logout(req, res); res.json({ ok: true }); });
 app.get('/api/me', (req, res) => {
-  res.json({ user: auth.publicUser(auth.currentUser(req)), panelName: store.getSection('settings').panelName, version: pkg.version });
+  res.json({ user: auth.publicUser(auth.currentUser(req)), panelName: store.getSection('settings').panelName, version: pkg.version, permissionLabels: auth.PERMISSIONS, passwordPolicy: auth.policy() });
 });
 // Each user picks their own admin theme.
 app.put('/api/me/theme', (req, res) => {
@@ -106,13 +160,15 @@ app.put('/api/me/theme', (req, res) => {
   store.update('users', user.id, { theme });
   res.json({ theme });
 });
-// Works while the one-time password is still active, so it sits before requireAuth.
+// Works while the one-time or expired password is still active, so it sits before requireAuth.
 app.post('/api/password', (req, res) => {
   const user = auth.currentUser(req);
   if (!user) return res.status(401).json({ error: 'Not logged in' });
+  if (user.authMethod === 'sso') return res.status(400).json({ error: 'Your password is managed by Microsoft' });
   const { current, password } = req.body || {};
   if (!auth.check(current || '', user.passwordHash)) return res.status(400).json({ error: 'Current password is wrong' });
-  if (!password || String(password).length < 8) return res.status(400).json({ error: 'Use at least 8 characters' });
+  const bad = auth.policyError(password);
+  if (bad) return res.status(400).json({ error: bad });
   if (password === current) return res.status(400).json({ error: 'Choose a new password' });
   auth.setPassword(user.id, password);
   res.json({ ok: true });
@@ -233,8 +289,21 @@ app.use('/player', express.static(path.join(PUBLIC, 'player')));
 // ---------- everything below needs a login ----------
 app.use('/api', auth.requireAuth);
 
-// Viewers may look but not change anything.
-app.use('/api', (req, res, next) => (req.method === 'GET' ? next() : auth.requireRole('editor')(req, res, next)));
+// Changes need the permission for that part of the panel; read only accounts can only look.
+// Anything not listed here (users, security, SSO, system) is for admins.
+const WRITE_PERMISSIONS = [
+  [/^\/(playouts|player)(\/|$)/, 'playouts'],
+  [/^\/(media|folders|feeds|cameras)(\/|$)/, 'media'],
+  [/^\/schedule(\/|$)/, 'schedule'],
+  [/^\/(outputs?|stream|accounts)(\/|$)/, 'outputs'],
+  [/^\/settings(\/|$)/, 'settings'],
+  [/^\/backups(\/|$)/, 'backups'],
+];
+app.use('/api', (req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || /^\/me(\/|$)/.test(req.path)) return next();
+  const rule = WRITE_PERMISSIONS.find(([re]) => re.test(req.path));
+  return rule ? auth.requirePerm(rule[1])(req, res, next) : auth.requireRole('admin')(req, res, next);
+});
 // Media library
 const upload = multer({
   storage: multer.diskStorage({
@@ -403,7 +472,7 @@ app.get('/api/settings', (req, res) => {
 });
 // Server address and port (admins only). A new port is opened before the old one closes, so a
 // port that is in use is refused without losing the panel.
-app.put('/api/settings/server', auth.requireRole('admin'), wrap(async (req, res) => {
+app.put('/api/settings/server', auth.requirePerm('settings'), wrap(async (req, res) => {
   const b = req.body || {};
   const serverAddress = String(b.serverAddress || '').trim().replace(/\/+$/, '').slice(0, 200);
   if (serverAddress && !/^[a-z0-9.\-:[\]]+$/i.test(serverAddress.replace(/^https?:\/\//i, ''))) return res.status(400).json({ error: 'Enter a host name or IP address, e.g. 192.168.1.50 or beeldkrant.example.com' });
@@ -586,6 +655,160 @@ app.delete('/api/cameras/:id', (req, res) => {
   store.remove('cameras', req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' });
 });
 
+// ---------- users, roles, security and SSO (admins only, see the write rules above) ----------
+const adminOnlyRead = auth.requireRole('admin');
+function cleanUserInput(b, existing = {}) {
+  const u = {};
+  if (b.username !== undefined) {
+    const name = String(b.username).trim().slice(0, 120);
+    if (!/^[\w.@+-]{2,120}$/.test(name)) throw new Error('Use 2 or more letters, digits or . _ - @ + for the user name');
+    const other = auth.findByName(name);
+    if (other && other.id !== existing.id) throw new Error('This user name is already taken');
+    u.username = name;
+  }
+  if (b.displayName !== undefined) u.displayName = String(b.displayName).trim().slice(0, 120);
+  if (b.email !== undefined) {
+    u.email = String(b.email).trim().toLowerCase().slice(0, 200);
+    if (u.email && !/^[^\s@]+@[^\s@]+$/.test(u.email)) throw new Error('Enter a valid e-mail address');
+  }
+  if (b.role !== undefined) {
+    if (!auth.ROLES.includes(b.role)) throw new Error('Unknown role');
+    u.role = b.role;
+  }
+  if (b.permissions !== undefined) u.permissions = Object.fromEntries(Object.keys(auth.PERMISSIONS).map((p) => [p, !!(b.permissions || {})[p]]));
+  if (b.authMethod !== undefined) u.authMethod = b.authMethod === 'sso' ? 'sso' : 'password';
+  if (b.mfaRequired !== undefined) u.mfaRequired = !!b.mfaRequired;
+  if (b.disabled !== undefined) u.disabled = !!b.disabled;
+  if (b.ssoOid !== undefined) u.ssoOid = String(b.ssoOid || '').slice(0, 64) || undefined;
+  return u;
+}
+const activeAdmins = (exceptId) => store.list('users').filter((x) => x.role === 'admin' && !x.disabled && x.id !== exceptId);
+
+app.get('/api/users', adminOnlyRead, (req, res) => res.json(store.list('users').map(auth.adminUser)));
+app.post('/api/users', (req, res) => {
+  const b = req.body || {};
+  try {
+    const u = cleanUserInput({ role: 'readonly', authMethod: 'password', ...b });
+    if (!u.username) throw new Error('Enter a user name');
+    if (u.authMethod === 'password') {
+      const bad = auth.policyError(b.password);
+      if (bad) throw new Error(bad);
+    } else if (!u.email && !u.ssoOid) throw new Error('Enter the e-mail address (user principal name) the user signs in with at Microsoft');
+    const created = store.create('users', { ...u, mustChangePassword: u.authMethod === 'password' && b.mustChangePassword !== false });
+    if (u.authMethod === 'password') auth.setPassword(created.id, b.password, { mustChange: b.mustChangePassword !== false });
+    res.json(auth.adminUser(store.get('users', created.id)));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.put('/api/users/:id', (req, res) => {
+  const existing = store.get('users', req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+  try {
+    const u = cleanUserInput(req.body || {}, existing);
+    const losesAdmin = existing.role === 'admin' && ((u.role && u.role !== 'admin') || u.disabled);
+    if (losesAdmin && !activeAdmins(existing.id).length) throw new Error('There must be at least one admin who can log in');
+    if (existing.id === req.user.id && (u.disabled || (u.role && u.role !== 'admin'))) throw new Error('You cannot take away your own admin role or disable yourself');
+    if (u.authMethod === 'password' && existing.authMethod === 'sso' && !existing.passwordHash && !(req.body || {}).password) throw new Error('Set a password for this user');
+    if ((req.body || {}).password) {
+      const bad = auth.policyError(req.body.password);
+      if (bad) throw new Error(bad);
+    }
+    const updated = store.update('users', existing.id, u);
+    if ((req.body || {}).password) auth.setPassword(existing.id, req.body.password, { mustChange: true });
+    if (u.authMethod && u.authMethod !== existing.authMethod) auth.endSessions(existing.id);
+    if (u.disabled) auth.endSessions(existing.id);
+    res.json(auth.adminUser(store.get('users', updated.id)));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.post('/api/users/:id/password', (req, res) => {
+  const u = store.get('users', req.params.id);
+  if (!u) return res.status(404).json({ error: 'Not found' });
+  if (u.authMethod === 'sso') return res.status(400).json({ error: 'This user signs in with Microsoft' });
+  const bad = auth.policyError((req.body || {}).password);
+  if (bad) return res.status(400).json({ error: bad });
+  auth.setPassword(u.id, req.body.password, { mustChange: (req.body || {}).mustChange !== false });
+  auth.endSessions(u.id);
+  res.json({ ok: true });
+});
+app.post('/api/users/:id/mfa/reset', (req, res) => {
+  const u = store.get('users', req.params.id);
+  if (!u) return res.status(404).json({ error: 'Not found' });
+  store.update('users', u.id, { totpSecret: null, recoveryCodes: [] });
+  auth.endSessions(u.id);
+  res.json(auth.adminUser(store.get('users', u.id)));
+});
+app.delete('/api/users/:id', (req, res) => {
+  const u = store.get('users', req.params.id);
+  if (!u) return res.status(404).json({ error: 'Not found' });
+  if (u.id === req.user.id) return res.status(400).json({ error: 'You cannot delete yourself' });
+  if (u.role === 'admin' && !activeAdmins(u.id).length) return res.status(400).json({ error: 'There must be at least one admin' });
+  auth.endSessions(u.id);
+  store.remove('users', u.id);
+  res.json({ ok: true });
+});
+
+// Your own two-step verification.
+app.post('/api/me/mfa/setup', (req, res) => {
+  if (req.user.authMethod === 'sso') return res.status(400).json({ error: 'Microsoft handles two-step verification for your account' });
+  const secret = auth.newMfaSecret();
+  res.json({ secret, otpauth: auth.otpauthUrl(req.user, secret) });
+});
+app.post('/api/me/mfa/enable', (req, res) => {
+  const { secret, code } = req.body || {};
+  if (!/^[A-Z2-7]{32}$/.test(String(secret || '')) || !auth.checkTotp(secret, code)) return res.status(400).json({ error: 'That code is not right. Check the time on your phone and try the newest code.' });
+  res.json({ recoveryCodes: auth.enableMfa(req.user.id, secret) });
+});
+app.delete('/api/me/mfa', (req, res) => {
+  if (req.user.mfaRequired) return res.status(400).json({ error: 'An admin has made two-step verification required for your account' });
+  if (!auth.check((req.body || {}).password || '', req.user.passwordHash)) return res.status(400).json({ error: 'Enter your current password to turn it off' });
+  store.update('users', req.user.id, { totpSecret: null, recoveryCodes: [] });
+  res.json({ ok: true });
+});
+
+app.get('/api/security', adminOnlyRead, (req, res) => res.json({ passwordPolicy: auth.policy(), ssoEnabled: sso.ready() }));
+app.put('/api/security', (req, res) => {
+  const p = (req.body || {}).passwordPolicy || {};
+  const passwordPolicy = {
+    minLength: Math.max(6, Math.min(128, Number(p.minLength) || 8)),
+    requireSpecial: !!p.requireSpecial,
+    requireMixed: !!p.requireMixed,
+    expiryDays: Math.max(0, Math.min(3650, Number(p.expiryDays) || 0)),
+  };
+  store.setSection('security', { passwordPolicy });
+  res.json({ passwordPolicy });
+});
+
+app.get('/api/sso', adminOnlyRead, (req, res) => res.json({ ...sso.publicConfig(), redirectUri: sso.redirectUri(req) }));
+function cleanSso(b) {
+  const cur = sso.config();
+  const out = {
+    enabled: !!b.enabled,
+    tenantId: String(b.tenantId ?? cur.tenantId).trim().slice(0, 100),
+    clientId: String(b.clientId ?? cur.clientId).trim().slice(0, 100),
+    clientSecret: b.clientSecret ? String(b.clientSecret).trim().slice(0, 300) : cur.clientSecret,
+    buttonLabel: String(b.buttonLabel ?? cur.buttonLabel).trim().slice(0, 60) || 'Sign in with Microsoft',
+    provisioning: !!b.provisioning,
+    defaultRole: auth.ROLES.includes(b.defaultRole) ? b.defaultRole : 'readonly',
+    defaultPermissions: Object.fromEntries(Object.keys(auth.PERMISSIONS).map((p) => [p, !!(b.defaultPermissions || {})[p]])),
+    roleClaims: Object.fromEntries(['admin', 'user', 'readonly'].map((r) => [r, String(((b.roleClaims || {})[r]) ?? '').trim().slice(0, 100)])),
+  };
+  if (out.tenantId && !/^[\w.-]+$/.test(out.tenantId)) throw new Error('The tenant ID is a GUID or a domain such as contoso.onmicrosoft.com');
+  if (out.enabled && !(out.tenantId && out.clientId && out.clientSecret)) throw new Error('Enter the tenant ID, client ID and client secret before turning Microsoft sign-in on');
+  return out;
+}
+app.put('/api/sso', (req, res) => {
+  try {
+    store.setSection('sso', cleanSso(req.body || {}));
+    res.json({ ...sso.publicConfig(), redirectUri: sso.redirectUri(req) });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.post('/api/sso/test', wrap(async (req, res) => {
+  const b = req.body || {};
+  try { res.json(await sso.test({ tenantId: b.tenantId, clientId: b.clientId, ...(b.clientSecret ? { clientSecret: b.clientSecret } : {}) })); } catch (err) { res.json({ ok: false, steps: [{ ok: false, text: err.message }] }); }
+}));
+app.get('/api/sso/directory', adminOnlyRead, wrap(async (req, res) => {
+  try { res.json(await sso.searchDirectory(req.query.q)); } catch (err) { res.status(400).json({ error: err.message }); }
+}));
+
 // Linked accounts and the API credentials to link them (admins only).
 const adminOnly = auth.requireRole('admin');
 app.get('/api/connections', adminOnly, (req, res) => {
@@ -660,8 +883,8 @@ app.get('/api/system/info', auth.requireRole('admin'), wrap(async (req, res) => 
   });
 }));
 
-// Backups (admins only). Secrets of the external location are never sent back to the browser.
-const admin = auth.requireRole('admin');
+// Backups (backups permission). Secrets of the external location are never sent back to the browser.
+const backupAccess = auth.requirePerm('backups');
 function publicBackupConfig() {
   const cfg = store.getSection('backup');
   const { password, privateKey, ...remote } = cfg.remote;
@@ -681,8 +904,8 @@ function backupRemote(input) {
   r.allowSelfSigned = !!r.allowSelfSigned;
   return r;
 }
-app.get('/api/backups/config', admin, (req, res) => res.json(publicBackupConfig()));
-app.put('/api/backups/config', admin, (req, res) => {
+app.get('/api/backups/config', backupAccess, (req, res) => res.json(publicBackupConfig()));
+app.put('/api/backups/config', backupAccess, (req, res) => {
   const b = req.body || {};
   const cfg = store.getSection('backup');
   const next = {
@@ -699,24 +922,24 @@ app.put('/api/backups/config', admin, (req, res) => {
   store.setSection('backup', next);
   res.json(publicBackupConfig());
 });
-app.post('/api/backups/test', admin, wrap(async (req, res) => {
+app.post('/api/backups/test', backupAccess, wrap(async (req, res) => {
   const remote = backupRemote((req.body || {}).remote);
   const files = await backup.withRemote(remote, (r) => r.list());
   res.json({ ok: true, backups: files.filter((f) => backup.NAME_RE.test(f.name)).length });
 }));
-app.get('/api/backups/status', admin, (req, res) => res.json(backup.status()));
-app.get('/api/backups', admin, wrap(async (req, res) => res.json(await backup.listSets(req.query.location === 'remote' ? 'remote' : 'local'))));
-app.post('/api/backups/run', admin, (req, res) => { backup.runBackup(); res.json(backup.status()); });
-app.post('/api/backups/restore', admin, (req, res) => {
+app.get('/api/backups/status', backupAccess, (req, res) => res.json(backup.status()));
+app.get('/api/backups', backupAccess, wrap(async (req, res) => res.json(await backup.listSets(req.query.location === 'remote' ? 'remote' : 'local'))));
+app.post('/api/backups/run', backupAccess, (req, res) => { backup.runBackup(); res.json(backup.status()); });
+app.post('/api/backups/restore', backupAccess, (req, res) => {
   const { location, id, parts } = req.body || {};
   backup.runRestore({ location: location === 'remote' ? 'remote' : 'local', id: String(id || ''), parts: Array.isArray(parts) ? parts : [] });
   res.json(backup.status());
 });
-app.delete('/api/backups/:id', admin, wrap(async (req, res) => {
+app.delete('/api/backups/:id', backupAccess, wrap(async (req, res) => {
   await backup.removeSet(req.query.location === 'remote' ? 'remote' : 'local', req.params.id);
   res.json({ ok: true });
 }));
-app.get('/api/backups/download/:name', admin, (req, res) => {
+app.get('/api/backups/download/:name', backupAccess, (req, res) => {
   if (!backup.NAME_RE.test(req.params.name)) return res.status(404).json({ error: 'Not found' });
   res.download(path.join(backup.BACKUP_DIR, req.params.name));
 });

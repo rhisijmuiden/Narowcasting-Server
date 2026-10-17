@@ -2,6 +2,18 @@
 
 All notable changes to Beeldkrant. The admin panel shows this file under the Info button.
 
+## 0.7.0 (2026-10-17)
+
+### Added
+- Users and roles under Settings: add, edit, disable and remove users. Three roles: Admin (everything), User (only the parts you switch on: playouts, media, schedule, outputs, application settings, backups) and Read only (can look at everything, change nothing).
+- Microsoft Entra SSO under Users and roles → Configure SSO: tenant, app and secret with a configuration test, the redirect URI to copy, sign-in with Microsoft per user, accounts created on first sign-in with a default role, role mapping from Entra app roles, and adding people straight from the Entra directory.
+- Security under Settings: require MFA per user (or for everyone or all admins) with an authenticator app, a QR code to set it up and 8 recovery codes; reset a user's MFA. Users can turn MFA on under their account.
+- Password policy: minimum length, special characters, upper and lower case and an expiry period. It does not apply to users who sign in with Entra SSO.
+- Sign-in is paused for a while after 5 wrong passwords.
+
+### Changed
+- Existing editor accounts become User (everything except settings and backups) and viewer accounts become Read only.
+
 ## 0.6.0 (2026-10-17)
 
 ### Added

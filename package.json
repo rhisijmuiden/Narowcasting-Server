@@ -1,6 +1,6 @@
 {
   "name": "beeldkrant",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Narrowcasting picture-newspaper generator that renders layouts and pushes them as an RTMP stream",
   "main": "server/index.js",
   "type": "commonjs",
@@ -15,6 +15,7 @@
     "basic-ftp": "^6.2.3",
     "express": "^4.21.2",
     "multer": "^2.0.2",
+    "qrcode": "^1.5.4",
     "rss-parser": "^3.13.0",
     "ssh2-sftp-client": "^12.1.1"
   }
