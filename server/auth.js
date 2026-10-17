@@ -39,7 +39,7 @@ function bootstrap() {
 }
 
 function publicUser(u) {
-  return u && { id: u.id, username: u.username, role: u.role, mustChangePassword: !!u.mustChangePassword };
+  return u && { id: u.id, username: u.username, role: u.role, mustChangePassword: !!u.mustChangePassword, theme: u.theme || 'system' };
 }
 
 function findByName(username) {

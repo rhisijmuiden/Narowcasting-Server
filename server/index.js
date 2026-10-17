@@ -88,7 +88,15 @@ app.post('/api/login', (req, res) => {
 });
 app.post('/api/logout', (req, res) => { auth.logout(req, res); res.json({ ok: true }); });
 app.get('/api/me', (req, res) => {
-  res.json({ user: auth.publicUser(auth.currentUser(req)), version: pkg.version });
+  res.json({ user: auth.publicUser(auth.currentUser(req)), panelName: store.getSection('settings').panelName, version: pkg.version });
+});
+// Each user picks their own admin theme.
+app.put('/api/me/theme', (req, res) => {
+  const user = auth.currentUser(req);
+  if (!user) return res.status(401).json({ error: 'Not logged in' });
+  const theme = ['light', 'dark', 'system'].includes((req.body || {}).theme) ? req.body.theme : 'system';
+  store.update('users', user.id, { theme });
+  res.json({ theme });
 });
 // Works while the one-time password is still active, so it sits before requireAuth.
 app.post('/api/password', (req, res) => {
@@ -290,8 +298,14 @@ app.get('/api/settings', (req, res) => {
   res.json({ ...rest, activePlayoutId: schedule.activePlayoutId() });
 });
 app.put('/api/settings', (req, res) => {
-  const { defaultPlayoutId = null, timezone, locale } = req.body || {};
-  const patch = { defaultPlayoutId };
+  const { timezone, locale, panelName } = req.body || {};
+  const patch = {};
+  if ('defaultPlayoutId' in (req.body || {})) patch.defaultPlayoutId = req.body.defaultPlayoutId || null;
+  if (panelName !== undefined) {
+    const name = String(panelName).trim().slice(0, 60);
+    if (!name) return res.status(400).json({ error: 'The panel name cannot be empty' });
+    patch.panelName = name;
+  }
   if (locale) {
     try { new Intl.DateTimeFormat(locale); patch.locale = locale; } catch { return res.status(400).json({ error: 'Unknown locale' }); }
   }

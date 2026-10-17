@@ -82,6 +82,10 @@ Under *Stream output* you set:
 
 Start, stop and watch the stream (state, fps, bitrate and renderer log) on the dashboard.
 
+## Look and feel
+
+Under *Settings* you can rename the panel (shown in the menu, on the login page and in the browser tab). Each user picks a light or dark theme, or *Auto* to follow the device, with the switch at the bottom of the menu.
+
 ## Users
 
 On first start Beeldkrant creates the user `admin` with a random one-time password (shown by the installer and kept in `DATA_DIR/initial-admin-password` until it is changed). Accounts carry a role (`admin`, `editor`, `viewer`); a user management screen for creating more accounts is planned.

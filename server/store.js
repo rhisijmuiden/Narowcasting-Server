@@ -24,6 +24,7 @@ function defaults() {
       defaultPlayoutId: null,
       timezone: process.env.TZ || 'Europe/Amsterdam',
       locale: 'en-GB',
+      panelName: 'Beeldkrant',
     },
     output: {
       enabled: false,

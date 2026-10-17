@@ -112,6 +112,31 @@
     });
   }
 
+  // ---------- branding and theme ----------
+  function brand() {
+    const name = (me && me.panelName) || 'Beeldkrant';
+    document.title = `${name} admin`;
+    // The default name keeps its two-tone logo; a custom name is shown as typed.
+    return name === 'Beeldkrant' ? h('div', { class: 'brand' }, 'Beeld', h('span', null, 'krant')) : h('div', { class: 'brand brand-plain' }, name);
+  }
+
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme || 'system';
+    try { localStorage.setItem('bk-theme', document.documentElement.dataset.theme); } catch { /* private mode */ }
+  }
+  try { applyTheme(localStorage.getItem('bk-theme')); } catch { applyTheme('system'); }
+
+  function themeSwitch() {
+    const current = (me.user && me.user.theme) || 'system';
+    return h('div', { class: 'theme-switch', title: 'Theme' }, [['light', 'Light'], ['dark', 'Dark'], ['system', 'Auto']].map(([value, label]) => h('button', {
+      class: current === value ? 'active' : '',
+      onclick: async () => {
+        applyTheme(value);
+        try { await PUT('/api/me/theme', { theme: value }); me.user.theme = value; route(); } catch (err) { fail(err); }
+      },
+    }, label)));
+  }
+
   // ---------- routing ----------
   const NAV = [
     ['dashboard', 'Dashboard'],
@@ -129,6 +154,7 @@
     if (!me) {
       try { me = await GET('/api/me'); } catch { me = { user: null }; }
     }
+    if (me.user) applyTheme(me.user.theme);
     if (!me.user) return renderLogin();
     if (me.user.mustChangePassword) return renderChangePassword(true);
     const [page, arg] = (location.hash.slice(1) || 'dashboard').split('/');
@@ -136,9 +162,10 @@
     const main = h('main', { class: 'main' });
     put(app, h('div', { class: 'shell' },
       h('nav', { class: 'nav' },
-        h('div', { class: 'brand' }, 'Beeld', h('span', null, 'krant')),
+        brand(),
         NAV.map(([id, label]) => h('a', { href: `#${id}`, class: page === id ? 'active' : '' }, label)),
         h('div', { class: 'spacer' }),
+        themeSwitch(),
         h('div', { class: 'who' }, `${me.user.username} (${me.user.role})`),
         h('a', { href: '#', onclick: async (e) => { e.preventDefault(); await POST('/api/logout'); me = null; route(); } }, 'Log out'),
       ),
@@ -156,12 +183,13 @@
       e.preventDefault();
       try {
         const res = await POST('/api/login', { username: user.value, password: pass.value });
-        me = { user: res.user };
+        applyTheme(res.user.theme);
+        me = { ...me, user: res.user };
         route();
       } catch (err) { fail(err); }
     };
     put(app, h('div', { class: 'login' }, h('form', { class: 'card stack', onsubmit: submit },
-      h('div', { class: 'brand' }, 'Beeld', h('span', null, 'krant')),
+      brand(),
       field('Username', user), field('Password', pass),
       h('button', { class: 'primary', type: 'submit' }, 'Log in'),
       h('div', { class: 'hint' }, 'First login: use the one-time password shown at the end of the installation.'),
@@ -185,7 +213,7 @@
       } catch (err) { fail(err); }
     };
     const form = h('form', { class: 'card stack', onsubmit: submit },
-      forced ? h('div', { class: 'brand' }, 'Beeld', h('span', null, 'krant')) : null,
+      forced ? brand() : null,
       forced ? h('p', null, 'You are using a one-time password. Choose your own password to continue.') : null,
       field(forced ? 'One-time password' : 'Current password', cur), field('New password (at least 8 characters)', p1), field('Repeat new password', p2),
       h('button', { class: 'primary', type: 'submit' }, 'Change password'));
@@ -1110,9 +1138,18 @@
   // ---------- settings ----------
   async function pageSettings(main) {
     const settings = await GET('/api/settings');
-    const data = { timezone: settings.timezone, locale: settings.locale, defaultPlayoutId: settings.defaultPlayoutId };
+    const data = { timezone: settings.timezone, locale: settings.locale };
+    const general = { panelName: settings.panelName || 'Beeldkrant' };
     main.append(h('h1', null, 'Settings'),
       h('div', { class: 'grid two' },
+        h('div', { class: 'card stack' }, h('h2', null, 'General'),
+          field('Panel name', bind(general, 'panelName', () => {}, 'text', { placeholder: 'Beeldkrant' }), { hint: 'Shown in the menu, on the login page and in the browser tab.' }),
+          h('button', { class: 'primary', onclick: async () => {
+            try { await PUT('/api/settings', general); me.panelName = general.panelName.trim(); toast('Saved', 'ok'); route(); } catch (err) { fail(err); }
+          } }, 'Save')),
+        h('div', { class: 'card stack' }, h('h2', null, 'Appearance'),
+          h('p', { class: 'muted' }, 'Choose a light or dark theme for your account, or follow your device setting.'),
+          themeSwitch()),
         h('div', { class: 'card stack' }, h('h2', null, 'Region'),
           field('Time zone', bind(data, 'timezone', () => {}, 'text', { placeholder: 'Europe/Amsterdam' }), { hint: 'Used by the schedule, clocks and dates.' }),
           field('Language for dates', bind(data, 'locale', () => {}, 'select', { options: [['en-GB', 'English (UK)'], ['en-US', 'English (US)'], ['nl-NL', 'Dutch'], ['de-DE', 'German'], ['fr-FR', 'French']] })),
