@@ -81,6 +81,8 @@ Transitions: fade, crossfade, cut, slide (left/right/up/down), zoom, wipe, circl
 | External | Shoutcast/Icecast audio streams (Media → *Add audio stream*) |
 | RSS / Atom | Media → *RSS feeds* |
 
+Keep media tidy in **folders**: create folders (and subfolders) under Media, upload straight into the folder you have open, and move files by dragging them onto a folder or a breadcrumb, or with *Move*. Deleting a folder keeps its files: they move up one level. The media pickers in the scene editor browse the same folders and can search all of them.
+
 ## Stream output
 
 Under *Stream output* you set:

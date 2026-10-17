@@ -385,8 +385,9 @@
     let feeds;
     let allPlayouts;
     let region;
+    let folders;
     try {
-      [playout, media, feeds, allPlayouts, region] = await Promise.all([GET(`/api/playouts/${id}`), GET('/api/media'), GET('/api/feeds'), GET('/api/playouts'), GET('/api/settings')]);
+      [playout, media, feeds, allPlayouts, region, folders] = await Promise.all([GET(`/api/playouts/${id}`), GET('/api/media'), GET('/api/feeds'), GET('/api/playouts'), GET('/api/settings'), GET('/api/folders')]);
     } catch (err) { fail(err); location.hash = 'playouts'; return; }
     playout.slides = playout.slides || [];
     playout.overlays = playout.overlays || [];
@@ -516,17 +517,12 @@
 
     function slidesFromMedia() {
       const chosen = new Set();
-      const grid = h('div', { class: 'pick-grid' }, media.filter((m) => m.type !== 'audio').map((m) => {
-        const card = h('div', { class: 'media-item', onclick: () => { chosen.has(m.id) ? chosen.delete(m.id) : chosen.add(m.id); card.classList.toggle('sel'); } },
-          thumb(m),
-          h('div', { class: 'meta' }, h('div', { class: 'name' }, m.name)));
-        return card;
-      }));
+      const visual = (m) => m.type !== 'audio';
       modal('Create scenes from media', h('div', { class: 'stack' },
-        h('p', { class: 'muted' }, 'Each file becomes a full-screen scene. Video scenes move on as soon as the video ends.'),
-        media.length ? grid : h('p', null, 'Upload media first.')),
+        h('p', { class: 'muted' }, 'Each file becomes a full-screen scene, in the order you click them. Video scenes move on as soon as the video ends.'),
+        media.some(visual) ? folderBrowser(media, folders, { filter: visual, multi: chosen }) : h('p', null, 'Upload media first.')),
       (close) => [h('button', { onclick: close }, 'Cancel'), h('button', { class: 'primary', onclick: () => {
-        for (const m of media.filter((x) => chosen.has(x.id))) {
+        for (const m of [...chosen].map((x) => mediaById[x]).filter(Boolean)) {
           const isVideo = m.type === 'video';
           playout.slides.push({
             id: uid(), name: m.name, duration: isVideo ? Math.ceil(m.duration || 10) : 10, advance: isVideo ? 'video' : 'duration', background: '#000000',
@@ -681,15 +677,10 @@
       return h('div', { class: 'row', style: { gap: '6px' } },
         h('span', { class: 'grow', style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, label),
         h('button', { class: 'small', onclick: () => {
-          const list = media.filter((x) => (type === 'any' ? x.type !== 'audio' : x.type === type));
+          const filter = (x) => (type === 'any' ? x.type !== 'audio' : x.type === type);
           let pick = obj[key];
-          const grid = h('div', { class: 'pick-grid' }, list.map((x) => {
-            const card = h('div', { class: `media-item ${pick === x.id ? 'sel' : ''}`, onclick: () => { pick = x.id; grid.querySelectorAll('.media-item').forEach((c) => c.classList.remove('sel')); card.classList.add('sel'); } },
-              thumb(x),
-              h('div', { class: 'meta' }, h('div', { class: 'name' }, x.name)));
-            return card;
-          }));
-          modal('Choose media', list.length ? grid : h('p', null, 'No matching media. Upload files under Media first.'), (close) => [
+          const body = media.some(filter) ? folderBrowser(media, folders, { filter, selected: pick, onPick: (id) => { pick = id; } }) : h('p', null, 'No matching media. Upload files under Media first.');
+          modal('Choose media', body, (close) => [
             h('button', { onclick: () => { obj[key] = null; close(); onChange(); } }, 'None'),
             h('button', { onclick: close }, 'Cancel'),
             h('button', { class: 'primary', onclick: () => { obj[key] = pick; close(); onChange(); } }, 'Choose'),
@@ -895,12 +886,136 @@
     requestAnimationFrame(drawCanvas);
   }
 
+  // ---------- media folders ----------
+  // The folder last opened, shared by the media page and the media pickers in the editor.
+  let lastFolderId = null;
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
+
+  // Folders from the top level down to folderId.
+  function folderTrail(folders, folderId) {
+    const byId = Object.fromEntries(folders.map((f) => [f.id, f]));
+    const trail = [];
+    for (let f = byId[folderId]; f && trail.length < 50; f = byId[f.parentId]) trail.unshift(f);
+    return trail;
+  }
+
+  // [[id, 'Parent / Child'], ...] for a folder select, starting with the top level.
+  function folderOptions(folders) {
+    const opts = folders.map((f) => [f.id, folderTrail(folders, f.id).map((x) => x.name).join(' / ')]);
+    return [['', 'Media (top level)'], ...opts.sort((a, b) => a[1].localeCompare(b[1], undefined, { numeric: true }))];
+  }
+
+  function crumbs(folders, folderId, go) {
+    const parts = [{ id: null, name: 'Media' }, ...folderTrail(folders, folderId)];
+    return h('div', { class: 'crumbs' }, parts.map((f, i) => [
+      i ? h('span', { class: 'sep' }, '/') : null,
+      h('button', { class: `crumb ${i === parts.length - 1 ? 'cur' : ''}`, 'data-folder': f.id || '', onclick: () => go(f.id) }, f.name),
+    ]));
+  }
+
+  const folderCount = (media, folders, id) => media.filter((m) => (m.folderId || null) === id).length + folders.filter((f) => (f.parentId || null) === id).length;
+
+  // Browses media by folder with a search across all folders. multi: Set of chosen ids, otherwise a single pick.
+  function folderBrowser(media, folders, { filter = () => true, multi = null, selected = null, onPick = () => {} } = {}) {
+    let cur = folders.some((f) => f.id === lastFolderId) ? lastFolderId : null;
+    let pick = selected;
+    if (pick && !multi) cur = (media.find((m) => m.id === pick) || {}).folderId || cur;
+    let q = '';
+    const crumbsEl = h('div');
+    const grid = h('div', { class: 'pick-grid' });
+    const search = h('input', { type: 'search', placeholder: 'Search all folders', oninput: (e) => { q = e.target.value.trim().toLowerCase(); draw(); } });
+    const open = (id) => { cur = id; lastFolderId = id; draw(); };
+    function draw() {
+      put(crumbsEl, q ? h('div', { class: 'crumbs muted' }, 'Search results') : crumbs(folders, cur, open));
+      const subs = q ? [] : folders.filter((f) => (f.parentId || null) === cur).sort(byName);
+      const items = media.filter(filter).filter((m) => (q ? m.name.toLowerCase().includes(q) : (m.folderId || null) === cur));
+      put(grid,
+        subs.map((f) => h('div', { class: 'folder-tile', onclick: () => open(f.id) },
+          h('div', { class: 'folder-icon' }), h('div', { class: 'name' }, f.name), h('small', null, `${folderCount(media, folders, f.id)} items`))),
+        items.map((m) => {
+          const on = multi ? multi.has(m.id) : pick === m.id;
+          const card = h('div', { class: `media-item ${on ? 'sel' : ''}`, onclick: () => {
+            if (multi) { multi.has(m.id) ? multi.delete(m.id) : multi.add(m.id); card.classList.toggle('sel'); } else {
+              pick = m.id; grid.querySelectorAll('.media-item').forEach((c) => c.classList.remove('sel')); card.classList.add('sel');
+            }
+            onPick(pick);
+          } }, thumb(m), h('div', { class: 'meta' }, h('div', { class: 'name', title: m.name }, m.name)));
+          return card;
+        }),
+        !subs.length && !items.length ? h('p', { class: 'muted' }, q ? 'Nothing found.' : 'No matching media in this folder.') : null);
+    }
+    draw();
+    return h('div', { class: 'stack' }, h('div', { class: 'row between', style: { gap: '8px', flexWrap: 'nowrap' } }, crumbsEl, h('div', { style: { width: '220px', flex: '0 0 220px' } }, search)), grid);
+  }
+
   // ---------- media ----------
   async function pageMedia(main) {
-    const media = await GET('/api/media');
+    let [media, folders] = await Promise.all([GET('/api/media'), GET('/api/folders')]);
+    let cur = folders.some((f) => f.id === lastFolderId) ? lastFolderId : null;
+    let q = '';
     const input = h('input', { type: 'file', multiple: true, accept: 'image/*,video/mp4,video/webm,video/quicktime,video/x-matroska,audio/*,.mp4,.mov,.mkv,.webm,.mp3,.m4a,.aac,.ogg,.wav,.flac', style: { display: 'none' } });
     const progress = h('div', { class: 'progress', style: { display: 'none', marginTop: '10px' } }, h('div'));
-    const drop = h('div', { class: 'dropzone', onclick: () => input.click() }, 'Drop images, videos or audio here, or click to choose files', h('div', { class: 'hint' }, 'Images: jpg, png, gif, webp, svg · Video: mp4, webm, mov, mkv · Audio: mp3, m4a, aac, ogg, wav, flac'), progress);
+    const dropLabel = h('span');
+    const drop = h('div', { class: 'dropzone', onclick: () => input.click() }, dropLabel, h('div', { class: 'hint' }, 'Images: jpg, png, gif, webp, svg · Video: mp4, webm, mov, mkv · Audio: mp3, m4a, aac, ogg, wav, flac'), progress);
+    const crumbsEl = h('div');
+    const listEl = h('div');
+    const search = h('input', { type: 'search', placeholder: 'Search all folders', oninput: (e) => { q = e.target.value.trim().toLowerCase(); draw(); } });
+    const curName = () => (cur ? folderTrail(folders, cur).map((f) => f.name).join(' / ') : 'the top level');
+
+    async function reload() {
+      [media, folders] = await Promise.all([GET('/api/media'), GET('/api/folders')]);
+      if (!folders.some((f) => f.id === cur)) cur = null;
+      draw();
+    }
+    const open = (id) => { cur = id; lastFolderId = id; q = ''; search.value = ''; draw(); };
+    const moveMedia = (id, folderId) => api('PATCH', `/api/media/${id}`, { folderId }).then(reload, fail);
+    const moveFolder = (id, parentId) => PUT(`/api/folders/${id}`, { parentId }).then(reload, fail);
+
+    // Media items and folders can be dragged onto a folder tile or a breadcrumb.
+    function dropTarget(el, folderId) {
+      el.addEventListener('dragover', (e) => {
+        if (!e.dataTransfer.types.includes('text/bk-media') && !e.dataTransfer.types.includes('text/bk-folder')) return;
+        e.preventDefault(); el.classList.add('over');
+      });
+      el.addEventListener('dragleave', () => el.classList.remove('over'));
+      el.addEventListener('drop', (e) => {
+        el.classList.remove('over');
+        const m = e.dataTransfer.getData('text/bk-media');
+        const f = e.dataTransfer.getData('text/bk-folder');
+        if (!m && !f) return;
+        e.preventDefault(); e.stopPropagation();
+        if (m) moveMedia(m, folderId);
+        else if (f && f !== folderId) moveFolder(f, folderId);
+      });
+    }
+    const draggable = (el, type, id) => {
+      el.draggable = true;
+      el.addEventListener('dragstart', (e) => { e.dataTransfer.setData(type, id); e.dataTransfer.effectAllowed = 'move'; });
+      return el;
+    };
+
+    function moveDialog(title, current, exclude, onMove) {
+      const data = { folderId: current || '' };
+      const opts = folderOptions(folders).filter(([id]) => !exclude || !exclude(id));
+      modal(title, field('Folder', bind(data, 'folderId', () => {}, 'select', { options: opts })), (close) => [
+        h('button', { onclick: close }, 'Cancel'),
+        h('button', { class: 'primary', onclick: () => { close(); onMove(data.folderId || null); } }, 'Move'),
+      ]);
+    }
+
+    function newFolder() {
+      const data = { name: '' };
+      const nameInput = bind(data, 'name', () => {}, 'text', { placeholder: 'e.g. Commercials' });
+      const create = async (close) => {
+        try { const f = await POST('/api/folders', { name: data.name, parentId: cur }); close(); folders.push(f); draw(); } catch (err) { fail(err); }
+      };
+      const close = modal('New folder', h('div', { class: 'stack' },
+        h('p', { class: 'muted' }, `Creates a folder in ${curName()}.`), field('Name', nameInput)),
+      (c) => [h('button', { onclick: c }, 'Cancel'), h('button', { class: 'primary', onclick: () => create(c) }, 'Create')]);
+      nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') create(close); });
+      nameInput.focus();
+    }
+
     const addStream = () => {
       const data = { name: '', url: '' };
       modal('Add audio stream', h('div', { class: 'stack' },
@@ -908,7 +1023,7 @@
         field('Name', bind(data, 'name', () => {}, 'text', { placeholder: 'e.g. Radio 1' })),
         field('Stream URL', bind(data, 'url', () => {}, 'url', { placeholder: 'https://stream.example.com:8000/live.mp3' }))),
       (close) => [h('button', { onclick: close }, 'Cancel'), h('button', { class: 'primary', onclick: async () => {
-        try { await POST('/api/media/external', data); close(); route(); } catch (err) { fail(err); }
+        try { await POST('/api/media/external', { ...data, folderId: cur }); close(); reload(); } catch (err) { fail(err); }
       } }, 'Add')]);
     };
 
@@ -917,12 +1032,12 @@
       const fd = new FormData();
       for (const f of files) fd.append('files', f);
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/media');
+      xhr.open('POST', `/api/media${cur ? `?folderId=${encodeURIComponent(cur)}` : ''}`);
       progress.style.display = '';
       xhr.upload.onprogress = (e) => { if (e.lengthComputable) progress.firstChild.style.width = `${(e.loaded / e.total) * 100}%`; };
       xhr.onload = () => {
         progress.style.display = 'none';
-        if (xhr.status >= 200 && xhr.status < 300) { toast('Upload complete', 'ok'); route(); } else {
+        if (xhr.status >= 200 && xhr.status < 300) { toast('Upload complete', 'ok'); reload(); } else {
           let msg = 'Upload failed';
           try { msg = JSON.parse(xhr.responseText).error || msg; } catch { /* keep */ }
           toast(msg, 'err');
@@ -931,21 +1046,67 @@
       xhr.onerror = () => { progress.style.display = 'none'; toast('Upload failed', 'err'); };
       xhr.send(fd);
     }
-    input.onchange = () => upload(input.files);
-    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+    input.onchange = () => { upload(input.files); input.value = ''; };
+    const isFileDrag = (e) => e.dataTransfer.types.includes('Files');
+    drop.addEventListener('dragover', (e) => { if (!isFileDrag(e)) return; e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-    drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); upload(e.dataTransfer.files); });
+    drop.addEventListener('drop', (e) => { if (!isFileDrag(e)) return; e.preventDefault(); drop.classList.remove('over'); upload(e.dataTransfer.files); });
 
-    main.append(h('div', { class: 'row between' }, h('h1', null, 'Media'), h('button', { onclick: addStream }, '+ Add audio stream')), drop, input, h('div', { style: { height: '16px' } }),
-      media.length ? h('div', { class: 'media-grid' }, media.slice().reverse().map((m) => h('div', { class: 'media-item' },
+    function folderTile(f) {
+      const tile = h('div', { class: 'folder-tile', onclick: () => open(f.id) },
+        h('div', { class: 'folder-icon' }),
+        h('div', { class: 'name', title: f.name }, f.name),
+        h('small', null, `${folderCount(media, folders, f.id)} items`),
+        h('div', { class: 'row', style: { marginTop: '6px', gap: '4px' }, onclick: (e) => e.stopPropagation() },
+          h('button', { class: 'small', onclick: async () => { const n = prompt('Folder name', f.name); if (n) { await PUT(`/api/folders/${f.id}`, { name: n }).catch(fail); reload(); } } }, 'Rename'),
+          h('button', { class: 'small', onclick: () => {
+            const inside = (id) => id === f.id || folderTrail(folders, id).some((x) => x.id === f.id);
+            moveDialog(`Move folder "${f.name}"`, f.parentId, inside, (to) => moveFolder(f.id, to));
+          } }, 'Move'),
+          h('button', { class: 'small ghost', onclick: async () => {
+            if (await confirmBox(`Delete folder "${f.name}"? Its files and subfolders are kept and move up one level.`)) { await DEL(`/api/folders/${f.id}`).catch(fail); reload(); }
+          } }, 'Delete')));
+      dropTarget(tile, f.id);
+      return draggable(tile, 'text/bk-folder', f.id);
+    }
+
+    function mediaTile(m) {
+      const where = q && m.folderId ? folderTrail(folders, m.folderId).map((f) => f.name).join(' / ') : null;
+      return draggable(h('div', { class: 'media-item' },
         h('a', { href: m.url, target: '_blank' }, thumb(m)),
         h('div', { class: 'meta' },
           h('div', { class: 'name', title: m.name }, m.name),
           h('small', null, m.external ? m.url : [m.width && `${m.width}x${m.height}`, m.duration && `${m.duration}s`, fmtBytes(m.size)].filter(Boolean).join(' · ')),
+          where ? h('div', null, h('small', null, `📁 ${where}`)) : null,
           h('div', { class: 'row', style: { marginTop: '6px', gap: '4px' } },
-            h('button', { class: 'small', onclick: async () => { const n = prompt('New name', m.name); if (n) { await api('PATCH', `/api/media/${m.id}`, { name: n }); route(); } } }, 'Rename'),
-            h('button', { class: 'small ghost', onclick: async () => { if (await confirmBox(`Delete "${m.name}"? Scenes that use it will show nothing in its place.`)) { await DEL(`/api/media/${m.id}`); route(); } } }, 'Delete'))),
-      ))) : h('p', { class: 'muted' }, 'No media uploaded yet.'));
+            h('button', { class: 'small', onclick: async () => { const n = prompt('New name', m.name); if (n) { await api('PATCH', `/api/media/${m.id}`, { name: n }).catch(fail); reload(); } } }, 'Rename'),
+            h('button', { class: 'small', onclick: () => moveDialog(`Move "${m.name}"`, m.folderId, null, (to) => moveMedia(m.id, to)) }, 'Move'),
+            h('button', { class: 'small ghost', onclick: async () => { if (await confirmBox(`Delete "${m.name}"? Scenes that use it will show nothing in its place.`)) { await DEL(`/api/media/${m.id}`).catch(fail); reload(); } } }, 'Delete')))),
+      'text/bk-media', m.id);
+    }
+
+    function draw() {
+      dropLabel.textContent = `Drop images, videos or audio here, or click to choose files. They go into ${curName()}.`;
+      if (q) put(crumbsEl, h('div', { class: 'crumbs muted' }, 'Search results in all folders'));
+      else {
+        const c = crumbs(folders, cur, open);
+        c.querySelectorAll('.crumb').forEach((b) => dropTarget(b, b.dataset.folder || null));
+        put(crumbsEl, c);
+      }
+      const subs = q ? [] : folders.filter((f) => (f.parentId || null) === cur).sort(byName);
+      const items = media.filter((m) => (q ? m.name.toLowerCase().includes(q) : (m.folderId || null) === cur)).reverse();
+      put(listEl, subs.length || items.length
+        ? h('div', { class: 'media-grid' }, subs.map(folderTile), items.map(mediaTile))
+        : h('p', { class: 'muted' }, q ? 'Nothing found.' : media.length || folders.length ? 'This folder is empty.' : 'No media uploaded yet.'));
+    }
+
+    main.append(
+      h('div', { class: 'row between' }, h('h1', null, 'Media'), h('div', { class: 'row', style: { gap: '8px' } },
+        h('button', { onclick: newFolder }, '+ New folder'), h('button', { onclick: addStream }, '+ Add audio stream'))),
+      drop, input,
+      h('div', { class: 'row between', style: { margin: '16px 0 12px', flexWrap: 'nowrap' } }, crumbsEl, h('div', { style: { width: '260px', flex: '0 0 260px' } }, search)),
+      listEl);
+    draw();
   }
 
   // ---------- feeds ----------

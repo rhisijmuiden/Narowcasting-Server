@@ -218,7 +218,50 @@ app.get('/api/media', (req, res) => {
 app.post('/api/media/external', (req, res) => {
   const { name, url } = req.body || {};
   if (!/^https?:\/\//i.test(String(url || ''))) return res.status(400).json({ error: 'Enter the http(s) address of the stream' });
-  res.json(store.create('media', { name: String(name || url).slice(0, 200), type: 'audio', external: true, url: String(url).trim(), size: 0 }));
+  const folderId = folderExists((req.body || {}).folderId || null) ? req.body.folderId || null : null;
+  res.json(store.create('media', { name: String(name || url).slice(0, 200), type: 'audio', external: true, url: String(url).trim(), size: 0, folderId }));
+});
+
+// Media folders: { name, parentId } (parentId null = top level). Media items carry a folderId.
+function folderExists(id) {
+  return id == null || !!store.get('folders', id);
+}
+
+app.get('/api/folders', (req, res) => res.json(store.list('folders')));
+app.post('/api/folders', (req, res) => {
+  const name = String((req.body || {}).name || '').trim().slice(0, 100);
+  const parentId = (req.body || {}).parentId || null;
+  if (!name) return res.status(400).json({ error: 'Give the folder a name' });
+  if (!folderExists(parentId)) return res.status(400).json({ error: 'Parent folder not found' });
+  res.json(store.create('folders', { name, parentId }));
+});
+app.put('/api/folders/:id', (req, res) => {
+  const folder = store.get('folders', req.params.id);
+  if (!folder) return res.status(404).json({ error: 'Not found' });
+  const patch = {};
+  if ((req.body || {}).name !== undefined) {
+    patch.name = String(req.body.name).trim().slice(0, 100);
+    if (!patch.name) return res.status(400).json({ error: 'Give the folder a name' });
+  }
+  if ('parentId' in (req.body || {})) {
+    const parentId = req.body.parentId || null;
+    if (!folderExists(parentId)) return res.status(400).json({ error: 'Parent folder not found' });
+    // A folder cannot move into itself or one of its own subfolders.
+    for (let p = parentId; p; p = (store.get('folders', p) || {}).parentId) {
+      if (p === folder.id) return res.status(400).json({ error: 'A folder cannot be moved into itself' });
+    }
+    patch.parentId = parentId;
+  }
+  res.json(store.update('folders', folder.id, patch));
+});
+// Deleting a folder keeps its contents: files and subfolders move up one level.
+app.delete('/api/folders/:id', (req, res) => {
+  const folder = store.get('folders', req.params.id);
+  if (!folder) return res.status(404).json({ error: 'Not found' });
+  for (const m of store.list('media').filter((x) => x.folderId === folder.id)) store.update('media', m.id, { folderId: folder.parentId || null });
+  for (const f of store.list('folders').filter((x) => x.parentId === folder.id)) store.update('folders', f.id, { parentId: folder.parentId || null });
+  store.remove('folders', folder.id);
+  res.json({ ok: true });
 });
 
 app.post('/api/media', upload.array('files', 50), wrap(async (req, res) => {
@@ -234,6 +277,7 @@ app.post('/api/media', upload.array('files', 50), wrap(async (req, res) => {
       if (await thumbnail(f.path, path.join(store.MEDIA_DIR, name))) thumb = name;
     }
     created.push(store.create('media', {
+      folderId: folderExists(req.query.folderId || null) ? req.query.folderId || null : null,
       name: f.originalname, type, mime: f.mimetype, filename: f.filename, size: f.size, thumb,
       duration: type === 'image' ? null : info.duration, width: info.width || null, height: info.height || null, hasAudio: !!info.hasAudio,
     }));
@@ -242,7 +286,14 @@ app.post('/api/media', upload.array('files', 50), wrap(async (req, res) => {
 }));
 
 app.patch('/api/media/:id', (req, res) => {
-  const m = store.update('media', req.params.id, { name: String((req.body || {}).name || '').slice(0, 200) });
+  const b = req.body || {};
+  const patch = {};
+  if (b.name !== undefined) patch.name = String(b.name).trim().slice(0, 200) || undefined;
+  if ('folderId' in b) {
+    if (!folderExists(b.folderId || null)) return res.status(400).json({ error: 'Folder not found' });
+    patch.folderId = b.folderId || null;
+  }
+  const m = store.get('media', req.params.id) && store.update('media', req.params.id, Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)));
   if (!m) return res.status(404).json({ error: 'Not found' });
   res.json(m);
 });
