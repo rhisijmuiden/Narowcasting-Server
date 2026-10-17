@@ -194,9 +194,11 @@ async function createArchive(id, parts, work) {
   return name;
 }
 
-async function backup() {
+// opts.parts overrides the configured parts; opts.localOnly skips the external location
+// (used for the backup before an update).
+async function backup(opts = {}) {
   const cfg = config();
-  const parts = PARTS.filter((p) => cfg.parts && cfg.parts[p]);
+  const parts = opts.parts ? PARTS.filter((p) => opts.parts.includes(p)) : PARTS.filter((p) => cfg.parts && cfg.parts[p]);
   if (!parts.length) throw new Error('Choose at least one part to back up');
   const id = stamp();
   const work = path.join(BACKUP_DIR, `.work-${id}`);
@@ -215,7 +217,8 @@ async function backup() {
   const size = (await Promise.all(names.map((n) => fsp.stat(path.join(BACKUP_DIR, n))))).reduce((a, s) => a + s.size, 0);
   log(`Backup ${id} written (${(size / 1e6).toFixed(1)} MB)`);
 
-  if (remoteConfigured(cfg.remote)) {
+  const upload = remoteConfigured(cfg.remote) && !opts.localOnly;
+  if (upload) {
     await withRemote(cfg.remote, async (r) => {
       for (const name of names) {
         log(`Uploading ${name} to ${cfg.remote.host}`);
@@ -226,7 +229,7 @@ async function backup() {
     log('Upload complete');
   }
   // Without an external location at least the newest backup stays here.
-  await prune(local, Math.max(remoteConfigured(cfg.remote) ? 0 : 1, Number(cfg.keepLocal) || 0));
+  await prune(local, Math.max(upload ? 0 : 1, Number(cfg.keepLocal) || 0));
   log(`Backup ${id} complete`);
   return { id, files: names, size };
 }
@@ -289,17 +292,21 @@ async function restore({ location, id, parts }) {
 
 // ---------- jobs ----------
 // Runs one backup or restore at a time in the background; status() reports on it.
-function startJob(kind, fn) {
+function startJob(kind, fn, done = () => {}) {
   if (job.running) throw new Error(`A ${job.kind} is already running`);
   Object.assign(job, { running: true, kind, phase: 'Starting', startedAt: new Date().toISOString(), log: [] });
   log(kind === 'backup' ? 'Starting backup' : 'Starting restore');
   fn().then((result) => {
     saveLast({ [kind]: { at: new Date().toISOString(), ok: true, message: job.phase, ...(result || {}) } });
+    job.running = false;
+    done(null, result);
   }).catch((err) => {
     log(`Failed: ${err.message}`);
     console.error(`Backup: ${kind} failed:`, err.message);
     saveLast({ [kind]: { at: new Date().toISOString(), ok: false, message: err.message } });
-  }).finally(() => { job.running = false; });
+    job.running = false;
+    done(err);
+  });
 }
 
 function status() {
@@ -363,7 +370,7 @@ module.exports = {
   listSets,
   withRemote,
   remoteConfigured,
-  runBackup: () => startJob('backup', backup),
+  runBackup: (opts, done) => startJob('backup', () => backup(opts), done),
   runRestore: (opts) => startJob('restore', () => restore(opts)),
   async removeSet(location, id) {
     const remove = async (loc) => {

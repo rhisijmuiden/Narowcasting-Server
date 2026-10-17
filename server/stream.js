@@ -156,7 +156,7 @@ class StreamManager extends EventEmitter {
       '--disable-features=Translate,MediaRouter', '--autoplay-policy=no-user-gesture-required', '--disable-dev-shm-usage',
       '--hide-scrollbars', '--force-device-scale-factor=1', '--kiosk', `--window-position=0,0`, `--window-size=${w},${h}`,
       `--user-data-dir=${profile}`, '--password-store=basic', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
-      `--app=http://127.0.0.1:${PORT}/player/?output=1`,
+      `--app=http://127.0.0.1:${this.port || PORT}/player/?output=1`,
     ], { DISPLAY, ...audioEnv });
     await sleep(Number(process.env.BK_BROWSER_WARMUP_MS) || 4000);
 

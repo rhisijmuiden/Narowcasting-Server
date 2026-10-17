@@ -148,19 +148,44 @@
     } catch { /* not important enough to show an error */ }
   }
 
+  // The bottom-left Info button; a dot marks an available update.
+  function infoButton(active) {
+    const btn = h('a', { href: '#info', class: `info-btn ${active ? 'active' : ''}` }, h('span', { class: 'info-i' }, 'i'), 'Info', h('small', null, me.version ? `v${me.version}` : ''));
+    GET('/api/system/update').then((u) => { if (u.available) btn.appendChild(h('span', { class: 'update-dot', title: 'A new version is available' })); }).catch(() => {});
+    return btn;
+  }
+
+  // Asks whether to make a local backup first, then starts the update.
+  function runUpdate(before) {
+    const opts = { backup: true, media: false };
+    const mediaBox = h('label', { class: 'check' }, bind(opts, 'media', () => {}, 'checkbox'), h('span', null, 'Also back up the media', h('div', { class: 'hint' }, 'All media folders and files. Takes longer and needs more disk space.')));
+    modal('Update Beeldkrant', h('div', { class: 'stack' },
+      h('p', null, 'Beeldkrant restarts during the update. The stream pauses briefly.'),
+      h('label', { class: 'check' }, bind(opts, 'backup', () => { mediaBox.style.opacity = opts.backup ? '' : '.5'; mediaBox.querySelector('input').disabled = !opts.backup; }, 'checkbox'),
+        h('span', null, h('b', null, 'Make a local backup first'), h('div', { class: 'hint' }, 'Backs up the application and the database on this server, so you can go back from Settings → Backups.'))),
+      mediaBox),
+    (close) => [h('button', { onclick: close }, 'Cancel'), h('button', { class: 'primary', onclick: () => { close(); followUpdate(before, opts); } }, 'Update now')]);
+  }
+
   // Starts the update and follows it until the restarted server runs the new version.
-  async function runUpdate(before) {
-    const logBox = h('div', { class: 'logs', style: { height: '220px' } }, 'Starting update…');
-    const statusLine = h('p', null, 'Beeldkrant is updating. The stream pauses briefly while the service restarts.');
+  async function followUpdate(before, opts) {
+    const logBox = h('div', { class: 'logs', style: { height: '220px' } }, 'Starting…');
+    const statusLine = h('p', null, opts.backup ? 'Making a backup before the update…' : 'Beeldkrant is updating. The stream pauses briefly while the service restarts.');
     let closeModal = () => {};
     let stopped = false;
     closeModal = modal('Updating Beeldkrant', h('div', { class: 'stack' }, statusLine, logBox), (close) => [h('button', { onclick: () => { stopped = true; close(); } }, 'Close')]);
-    try { await POST('/api/system/update'); } catch (err) { fail(err); closeModal(); return; }
+    try { await POST('/api/system/update', { backup: opts.backup, media: opts.backup && opts.media }); } catch (err) { fail(err); closeModal(); return; }
     const started = Date.now();
-    while (!stopped && Date.now() - started < 15 * 60 * 1000) {
+    while (!stopped && Date.now() - started < 30 * 60 * 1000) {
       await new Promise((r) => setTimeout(r, 2000));
       let u;
       try { u = await GET('/api/system/update'); } catch { statusLine.textContent = 'Restarting Beeldkrant…'; continue; }
+      if (u.prepare) {
+        if (u.prepare.state === 'failed') { statusLine.textContent = u.prepare.message; return; }
+        try { const b = await GET('/api/backups/status'); logBox.textContent = b.log.join('\n'); logBox.scrollTop = logBox.scrollHeight; } catch { /* keep the last log */ }
+        continue;
+      }
+      statusLine.textContent = 'Beeldkrant is updating. The stream pauses briefly while the service restarts.';
       if (u.log) { logBox.textContent = u.log; logBox.scrollTop = logBox.scrollHeight; }
       if (u.commit && u.commit !== before.commit) {
         toast('Beeldkrant is updated', 'ok');
@@ -193,21 +218,56 @@
   }
 
   // ---------- routing ----------
-  const NAV = [
-    ['dashboard', 'Dashboard'],
+  // Menu: groups separated by lines ('-'). Items are [hash, label, children?]; a dropdown group
+  // folds its children away until it is opened.
+  const MENU = [
+    ['dashboard', 'Dashboard', [['stats', 'Statistics']]],
+    '-',
     ['playouts', 'Playouts'],
-    ['media', 'Media'],
-    ['feeds', 'RSS feeds'],
+    '-',
+    ['library', 'Media management', [
+      ['media', 'Media folders', [['media/video', 'Video'], ['media/audio', 'Audio'], ['media/ads', 'Ads']]],
+      ['feeds', 'RSS feeds'],
+      ['streams', 'Input streams'],
+    ], { dropdown: true }],
+    '-',
     ['schedule', 'Schedule'],
-    ['output', 'Stream output'],
-    ['settings', 'Settings'],
+    '-',
+    ['output', 'Outputs'],
+    '-',
+    ['settings', 'Settings', [['settings', 'Application'], ['backups', 'Backups', null, { admin: true }]]],
   ];
-  const SYSTEM_NAV = [
-    ['info', 'Info'],
-    ['backups', 'Backups'],
-  ];
-  const SYSTEM_PAGES = SYSTEM_NAV.map(([id]) => id);
   let cleanup = null;
+
+  const menuHashes = (item) => [item[0], ...(item[2] || []).flatMap(menuHashes)];
+
+  function renderMenu(current) {
+    const isAdmin = me.user.role === 'admin';
+    const link = ([hash, label, children, opts = {}], depth) => {
+      if (opts.admin && !isAdmin) return null;
+      const inside = menuHashes([hash, label, children]).includes(current);
+      let open = !opts.dropdown || inside;
+      if (opts.dropdown) { try { open = open || localStorage.getItem(`bk-menu-${hash}`) === 'open'; } catch { /* private mode */ } }
+      const kids = children ? h('div', { class: 'nav-kids', style: { display: open ? '' : 'none' } }, children.map((c) => link(c, depth + 1))) : null;
+      const a = h('a', {
+        href: `#${hash}`,
+        // A group whose first child opens the same page is only highlighted through that child.
+        class: [depth ? `sub d${depth}` : '', current === hash && !(children || []).some((c) => c[0] === hash) ? 'active' : '', inside && current !== hash ? 'open' : ''].join(' '),
+        onclick: opts.dropdown ? () => { try { localStorage.setItem(`bk-menu-${hash}`, 'open'); } catch { /* private mode */ } } : null,
+      }, label, opts.dropdown ? h('span', {
+        class: `caret ${open ? 'up' : ''}`,
+        onclick: (e) => {
+          e.preventDefault(); e.stopPropagation();
+          const show = kids.style.display === 'none';
+          kids.style.display = show ? '' : 'none';
+          e.target.classList.toggle('up', show);
+          try { localStorage.setItem(`bk-menu-${hash}`, show ? 'open' : 'closed'); } catch { /* private mode */ }
+        },
+      }) : null);
+      return [a, kids];
+    };
+    return MENU.map((item) => (item === '-' ? h('hr', { class: 'nav-sep' }) : link(item, 0)));
+  }
 
   async function route() {
     if (cleanup) { cleanup(); cleanup = null; }
@@ -217,26 +277,27 @@
     if (me.user) applyTheme(me.user.theme);
     if (!me.user) return renderLogin();
     if (me.user.mustChangePassword) return renderChangePassword(true);
-    const [page, arg] = (location.hash.slice(1) || 'dashboard').split('/');
+    const hash = location.hash.slice(1) || 'dashboard';
+    const [page, arg] = hash.split('/');
     if (page === 'playout' && arg) return renderEditor(arg);
     const main = h('main', { class: 'main' });
     put(app, h('div', { class: 'shell' },
       h('nav', { class: 'nav' },
         brand(),
-        NAV.map(([id, label]) => h('a', { href: `#${id}`, class: page === id ? 'active' : '' }, label)),
-        me.user.role === 'admin' ? [
-          h('a', { href: '#info', class: SYSTEM_PAGES.includes(page) ? 'open' : '' }, 'System'),
-          SYSTEM_NAV.map(([id, label]) => h('a', { href: `#${id}`, class: `sub ${page === id ? 'active' : ''}` }, label)),
-        ] : null,
+        renderMenu(hash),
         h('div', { class: 'spacer' }),
+        me.user.role === 'admin' ? infoButton(page === 'info') : null,
         themeSwitch(),
-        h('div', { class: 'who' }, `${me.user.username} (${me.user.role})`),
+        h('a', { href: '#account', class: `who ${page === 'account' ? 'active' : ''}`, title: 'Your account' }, `${me.user.username} (${me.user.role})`),
         h('a', { href: '#', onclick: async (e) => { e.preventDefault(); await POST('/api/logout'); me = null; route(); } }, 'Log out'),
       ),
       main));
-    if (me.user.role === 'admin') updateBanner(main);
-    const pages = { dashboard: pageDashboard, playouts: pagePlayouts, media: pageMedia, feeds: pageFeeds, schedule: pageSchedule, output: pageOutput, settings: pageSettings, info: pageInfo, backups: pageBackups };
-    try { await (pages[page] || pageDashboard)(main); } catch (err) { fail(err); }
+    if (me.user.role === 'admin' && page !== 'info') updateBanner(main);
+    const pages = {
+      dashboard: pageDashboard, stats: pageStats, playouts: pagePlayouts, library: pageLibrary, media: pageMedia, feeds: pageFeeds, streams: pageStreams,
+      schedule: pageSchedule, output: pageOutput, settings: pageSettings, backups: pageBackups, info: pageInfo, account: pageAccount,
+    };
+    try { await (pages[page] || pageDashboard)(main, arg); } catch (err) { fail(err); }
   }
   window.addEventListener('hashchange', () => { if (!editorGuard()) route(); });
 
@@ -987,8 +1048,12 @@
   }
 
   // ---------- media ----------
-  async function pageMedia(main) {
-    let [media, folders] = await Promise.all([GET('/api/media'), GET('/api/folders')]);
+  // Media folders, or one of the views across all folders: video, audio or ads (arg).
+  const MEDIA_VIEWS = { video: ['Video', (m) => m.type === 'video'], audio: ['Audio', (m) => m.type === 'audio'], ads: ['Ads', (m) => !!m.isAd] };
+  async function pageMedia(main, arg) {
+    const view = MEDIA_VIEWS[arg] || null;
+    const files = (list) => list.filter((m) => !m.external); // input streams have their own page
+    let [media, folders] = await Promise.all([GET('/api/media').then(files), GET('/api/folders')]);
     let cur = folders.some((f) => f.id === lastFolderId) ? lastFolderId : null;
     let q = '';
     const input = h('input', { type: 'file', multiple: true, accept: 'image/*,video/mp4,video/webm,video/quicktime,video/x-matroska,audio/*,.mp4,.mov,.mkv,.webm,.mp3,.m4a,.aac,.ogg,.wav,.flac', style: { display: 'none' } });
@@ -1001,7 +1066,7 @@
     const curName = () => (cur ? folderTrail(folders, cur).map((f) => f.name).join(' / ') : 'the top level');
 
     async function reload() {
-      [media, folders] = await Promise.all([GET('/api/media'), GET('/api/folders')]);
+      [media, folders] = await Promise.all([GET('/api/media').then(files), GET('/api/folders')]);
       if (!folders.some((f) => f.id === cur)) cur = null;
       draw();
     }
@@ -1054,23 +1119,15 @@
       nameInput.focus();
     }
 
-    const addStream = () => {
-      const data = { name: '', url: '' };
-      modal('Add audio stream', h('div', { class: 'stack' },
-        h('p', { class: 'muted' }, 'Register a Shoutcast or Icecast web stream as external media. Use it as background music in a playout.'),
-        field('Name', bind(data, 'name', () => {}, 'text', { placeholder: 'e.g. Radio 1' })),
-        field('Stream URL', bind(data, 'url', () => {}, 'url', { placeholder: 'https://stream.example.com:8000/live.mp3' }))),
-      (close) => [h('button', { onclick: close }, 'Cancel'), h('button', { class: 'primary', onclick: async () => {
-        try { await POST('/api/media/external', { ...data, folderId: cur }); close(); reload(); } catch (err) { fail(err); }
-      } }, 'Add')]);
-    };
-
     function upload(files) {
       if (!files.length) return;
       const fd = new FormData();
       for (const f of files) fd.append('files', f);
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', `/api/media${cur ? `?folderId=${encodeURIComponent(cur)}` : ''}`);
+      const query = new URLSearchParams();
+      if (cur) query.set('folderId', cur);
+      if (arg === 'ads') query.set('ad', '1');
+      xhr.open('POST', `/api/media?${query}`);
       progress.style.display = '';
       xhr.upload.onprogress = (e) => { if (e.lengthComputable) progress.firstChild.style.width = `${(e.loaded / e.total) * 100}%`; };
       xhr.onload = () => {
@@ -1109,7 +1166,7 @@
     }
 
     function mediaTile(m) {
-      const where = q && m.folderId ? folderTrail(folders, m.folderId).map((f) => f.name).join(' / ') : null;
+      const where = (q || view) && m.folderId ? folderTrail(folders, m.folderId).map((f) => f.name).join(' / ') : null;
       return draggable(h('div', { class: 'media-item' },
         h('a', { href: m.url, target: '_blank' }, thumb(m)),
         h('div', { class: 'meta' },
@@ -1119,12 +1176,20 @@
           h('div', { class: 'row', style: { marginTop: '6px', gap: '4px' } },
             h('button', { class: 'small', onclick: async () => { const n = prompt('New name', m.name); if (n) { await api('PATCH', `/api/media/${m.id}`, { name: n }).catch(fail); reload(); } } }, 'Rename'),
             h('button', { class: 'small', onclick: () => moveDialog(`Move "${m.name}"`, m.folderId, null, (to) => moveMedia(m.id, to)) }, 'Move'),
+            h('button', { class: `small ${m.isAd ? 'on' : ''}`, title: m.isAd ? 'Marked as an ad. Click to unmark.' : 'Mark as an ad (commercial)', onclick: () => api('PATCH', `/api/media/${m.id}`, { isAd: !m.isAd }).then(reload, fail) }, m.isAd ? 'Ad ✓' : 'Ad'),
             h('button', { class: 'small ghost', onclick: async () => { if (await confirmBox(`Delete "${m.name}"? Scenes that use it will show nothing in its place.`)) { await DEL(`/api/media/${m.id}`).catch(fail); reload(); } } }, 'Delete')))),
       'text/bk-media', m.id);
     }
 
     function draw() {
-      dropLabel.textContent = `Drop images, videos or audio here, or click to choose files. They go into ${curName()}.`;
+      dropLabel.textContent = `Drop images, videos or audio here, or click to choose files. They go into ${curName()}${arg === 'ads' ? ' and are marked as ads' : ''}.`;
+      if (view) {
+        const items = media.filter(view[1]).filter((m) => !q || m.name.toLowerCase().includes(q)).reverse();
+        put(crumbsEl, h('div', { class: 'crumbs muted' }, `${items.length} ${view[0].toLowerCase()} file${items.length === 1 ? '' : 's'} in all folders`));
+        put(listEl, items.length ? h('div', { class: 'media-grid' }, items.map(mediaTile))
+          : h('p', { class: 'muted' }, q ? 'Nothing found.' : arg === 'ads' ? 'No ads yet. Upload them here, or mark files as an ad with the Ad button.' : `No ${view[0].toLowerCase()} files yet.`));
+        return;
+      }
       if (q) put(crumbsEl, h('div', { class: 'crumbs muted' }, 'Search results in all folders'));
       else {
         const c = crumbs(folders, cur, open);
@@ -1139,8 +1204,8 @@
     }
 
     main.append(
-      h('div', { class: 'row between' }, h('h1', null, 'Media'), h('div', { class: 'row', style: { gap: '8px' } },
-        h('button', { onclick: newFolder }, '+ New folder'), h('button', { onclick: addStream }, '+ Add audio stream'))),
+      h('div', { class: 'row between' }, h('h1', null, view ? view[0] : 'Media folders'), h('div', { class: 'row', style: { gap: '8px' } },
+        view ? null : h('button', { onclick: newFolder }, '+ New folder'))),
       drop, input,
       h('div', { class: 'row between', style: { margin: '16px 0 12px', flexWrap: 'nowrap' } }, crumbsEl, h('div', { style: { width: '260px', flex: '0 0 260px' } }, search)),
       listEl);
@@ -1364,22 +1429,200 @@
   // ---------- settings ----------
   async function pageSettings(main) {
     const settings = await GET('/api/settings');
-    const data = { timezone: settings.timezone, locale: settings.locale };
+    const isAdmin = me.user.role === 'admin';
     const general = { panelName: settings.panelName || 'Beeldkrant' };
-    main.append(h('h1', null, 'Settings'),
+    const server = { serverAddress: settings.serverAddress || '', port: settings.port };
+    const region = { timezone: settings.timezone, locale: settings.locale };
+    const panelUrl = () => `http://${server.serverAddress || location.hostname}:${server.port}/admin/`;
+    const urlHint = h('div', { class: 'hint' });
+    const showUrl = () => { urlHint.textContent = `The panel is reached at ${panelUrl()}`; };
+    showUrl();
+    async function saveApp() {
+      try {
+        await PUT('/api/settings', general);
+        me.panelName = general.panelName.trim();
+        if (isAdmin) {
+          const r = await PUT('/api/settings/server', server);
+          if (r.moved) {
+            toast(`Beeldkrant now listens on port ${r.port}. Taking you there…`, 'ok');
+            setTimeout(() => { location.href = `${location.protocol}//${location.hostname}:${r.port}/admin/#settings`; }, 1200);
+            return;
+          }
+        }
+        toast('Saved', 'ok'); route();
+      } catch (err) { fail(err); }
+    }
+    main.append(h('h1', null, 'Application'),
       h('div', { class: 'grid two' },
-        h('div', { class: 'card stack' }, h('h2', null, 'General'),
-          field('Panel name', bind(general, 'panelName', () => {}, 'text', { placeholder: 'Beeldkrant' }), { hint: 'Shown in the menu, on the login page and in the browser tab.' }),
-          h('button', { class: 'primary', onclick: async () => {
-            try { await PUT('/api/settings', general); me.panelName = general.panelName.trim(); toast('Saved', 'ok'); route(); } catch (err) { fail(err); }
-          } }, 'Save')),
+        h('div', { class: 'card stack' }, h('h2', null, 'Application'),
+          field('Name', bind(general, 'panelName', () => {}, 'text', { placeholder: 'Beeldkrant' }), { hint: 'Shown in the menu, on the login page and in the browser tab.' }),
+          isAdmin ? [
+            field('Server address', bind(server, 'serverAddress', showUrl, 'text', { placeholder: location.hostname }), { hint: 'The host name or IP address people use to reach this server. Leave empty to use the address in your browser.' }),
+            field('Port', bind(server, 'port', showUrl, 'number', { min: 1, max: 65535 }), { hint: 'The web port of the admin panel. Changing it moves the panel to the new port right away.' }),
+            urlHint,
+          ] : null,
+          h('button', { class: 'primary', onclick: saveApp }, 'Save')),
+        h('div', { class: 'card stack' }, h('h2', null, 'Region'),
+          field('Time zone', bind(region, 'timezone', () => {}, 'text', { placeholder: 'Europe/Amsterdam' }), { hint: 'Used by the schedule, backups, clocks and dates.' }),
+          field('Language for dates', bind(region, 'locale', () => {}, 'select', { options: [['en-GB', 'English (UK)'], ['en-US', 'English (US)'], ['nl-NL', 'Dutch'], ['de-DE', 'German'], ['fr-FR', 'French']] })),
+          h('button', { class: 'primary', onclick: async () => { try { await PUT('/api/settings', region); toast('Saved', 'ok'); } catch (err) { fail(err); } } }, 'Save'))));
+  }
+
+
+  // ---------- dashboard: statistics ----------
+  // A single-series line chart over the stats history with a hover crosshair and tooltip.
+  function lineChart(history, pick, { unit, digits = 1, max: fixedMax, empty = 'Collecting data…' } = {}) {
+    const W = 600;
+    const H = 120;
+    const pts = history.map((p) => ({ t: p.t, v: pick(p) }));
+    const vals = pts.map((p) => p.v).filter((v) => v != null);
+    const max = fixedMax || Math.max(1e-6, ...vals) * 1.15;
+    const x = (i) => (pts.length > 1 ? (i / (pts.length - 1)) * W : 0);
+    const y = (v) => H - (v / max) * H;
+    let line = '';
+    let started = false;
+    pts.forEach((p, i) => {
+      if (p.v == null) { started = false; return; }
+      line += `${started ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`;
+      started = true;
+    });
+    const first = pts.findIndex((p) => p.v != null);
+    const lastIdx = pts.length - 1 - [...pts].reverse().findIndex((p) => p.v != null);
+    const area = vals.length > 1 && pts.slice(first, lastIdx + 1).every((p) => p.v != null) ? `${line}L${x(lastIdx)},${H}L${x(first)},${H}Z` : '';
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('preserveAspectRatio', 'none');
+    svg.setAttribute('class', 'chart-svg');
+    svg.innerHTML = `<line x1="0" y1="${H / 2}" x2="${W}" y2="${H / 2}" class="grid"/><line x1="0" y1="${H - 0.5}" x2="${W}" y2="${H - 0.5}" class="base"/>${area ? `<path d="${area}" class="area"/>` : ''}<path d="${line}" class="line"/>`;
+    const fmt = (v) => (v == null ? 'no data' : `${v.toFixed(digits)}${unit ? ` ${unit}` : ''}`);
+    const cross = h('div', { class: 'chart-cross', style: { display: 'none' } });
+    const dot = h('div', { class: 'chart-dot', style: { display: 'none' } });
+    const tip = h('div', { class: 'chart-tip', style: { display: 'none' } });
+    const box = h('div', { class: 'chart' }, h('span', { class: 'chart-max' }, fmt(max / 1.15 * (fixedMax ? 1.15 : 1))), svg, cross, dot, tip,
+      vals.length ? null : h('div', { class: 'chart-empty' }, empty));
+    box.addEventListener('mousemove', (e) => {
+      if (!pts.length) return;
+      const r = svg.getBoundingClientRect();
+      const i = Math.max(0, Math.min(pts.length - 1, Math.round(((e.clientX - r.left) / r.width) * (pts.length - 1))));
+      const px = (x(i) / W) * r.width;
+      cross.style.display = ''; cross.style.left = `${px}px`;
+      const p = pts[i];
+      if (p.v != null) { dot.style.display = ''; dot.style.left = `${px}px`; dot.style.top = `${(y(p.v) / H) * r.height}px`; } else dot.style.display = 'none';
+      tip.style.display = '';
+      tip.style.left = `${Math.min(px + 10, r.width - 120)}px`;
+      put(tip, h('b', null, fmt(p.v)), h('div', null, new Date(p.t).toLocaleTimeString()));
+    });
+    box.addEventListener('mouseleave', () => { cross.style.display = 'none'; dot.style.display = 'none'; tip.style.display = 'none'; });
+    return box;
+  }
+
+  const fmtGB = (n) => `${(n / 1e9).toFixed(n > 1e11 ? 0 : 1)} GB`;
+
+  async function pageStats(main) {
+    const tiles = h('div', { class: 'stat-tiles' });
+    const charts = h('div', { class: 'grid two' });
+    main.append(h('h1', null, 'Statistics'), tiles, charts,
+      h('p', { class: 'hint', style: { marginTop: '12px' } }, 'Updated every 5 seconds. The charts show the last 15 minutes.'));
+    async function refresh() {
+      let s;
+      try { s = await GET('/api/stats'); } catch { return; }
+      const last = s.history[s.history.length - 1] || {};
+      const lastOf = (k) => [...s.history].reverse().find((p) => p[k] != null)?.[k];
+      const tile = (label, value, sub, meter) => h('div', { class: 'card stat-tile' }, h('small', null, label), h('div', { class: 'stat-value' }, value), sub ? h('div', { class: 'hint' }, sub) : null,
+        meter != null ? h('div', { class: 'meter' }, h('div', { style: { width: `${Math.min(100, meter * 100)}%` }, class: meter > 0.9 ? 'hot' : '' })) : null);
+      const used = s.disk ? 1 - s.disk.free / s.disk.total : null;
+      const stream = lastOf('streamKbit');
+      put(tiles,
+        tile('Load', last.load != null ? last.load.toFixed(2) : '—', `${s.cpus} CPU core${s.cpus === 1 ? '' : 's'}`, last.load != null ? last.load / s.cpus : null),
+        tile('CPU', last.cpu != null ? `${Math.round(last.cpu * 100)}%` : '—', null, last.cpu),
+        tile('Memory', `${Math.round((last.mem || 0) * 100)}%`, `of ${fmtGB(s.memTotal)}`, last.mem),
+        tile('Stream out', last.streamKbit != null ? `${(last.streamKbit / 1000).toFixed(1)} Mbit/s` : 'Off air', stream != null && last.streamKbit == null ? 'Not streaming now' : 'Encoder bitrate'),
+        tile('Network out', last.txMbit != null ? `${last.txMbit.toFixed(1)} Mbit/s` : '—', last.rxMbit != null ? `In: ${last.rxMbit.toFixed(1)} Mbit/s` : null),
+        tile('Disk free', s.disk ? fmtGB(s.disk.free) : '—', s.disk ? `of ${fmtGB(s.disk.total)} (${Math.round(used * 100)}% used)` : null, used));
+      put(charts,
+        h('div', { class: 'card' }, h('h2', null, 'Stream bitrate (Mbit/s)'), lineChart(s.history, (p) => (p.streamKbit == null ? null : p.streamKbit / 1000), { unit: 'Mbit/s', digits: 2, empty: 'Not streaming' })),
+        h('div', { class: 'card' }, h('h2', null, 'Network out (Mbit/s)'), lineChart(s.history, (p) => p.txMbit, { unit: 'Mbit/s', digits: 2 })),
+        h('div', { class: 'card' }, h('h2', null, 'Load'), lineChart(s.history, (p) => p.load, { digits: 2 })),
+        h('div', { class: 'card' }, h('h2', null, 'CPU (%)'), lineChart(s.history, (p) => (p.cpu == null ? null : p.cpu * 100), { unit: '%', digits: 0, max: 100 })));
+    }
+    await refresh();
+    const iv = setInterval(refresh, 5000);
+    cleanup = () => clearInterval(iv);
+  }
+
+  // ---------- media management: overview ----------
+  async function pageLibrary(main) {
+    const [all, folders, feeds, playouts] = await Promise.all([GET('/api/media'), GET('/api/folders'), GET('/api/feeds'), GET('/api/playouts')]);
+    const files = all.filter((m) => !m.external);
+    const streams = all.filter((m) => m.external);
+    const size = (list) => fmtBytes(list.reduce((a, m) => a + (m.size || 0), 0));
+    const videos = files.filter((m) => m.type === 'video');
+    const seconds = Math.round(videos.reduce((a, m) => a + (m.duration || 0), 0));
+    const length = seconds >= 3600 ? `${Math.floor(seconds / 3600)} h ${Math.round((seconds % 3600) / 60)} min` : seconds >= 60 ? `${Math.round(seconds / 60)} min` : `${seconds} s`;
+    const card = (href, title, big, sub, list) => h('a', { class: 'card lib-card', href },
+      h('div', { class: 'row between' }, h('h2', { style: { margin: 0 } }, title), h('span', { class: 'muted' }, '→')),
+      h('div', { class: 'stat-value' }, big), sub ? h('div', { class: 'hint' }, sub) : null,
+      list && list.length ? h('ul', { class: 'lib-list' }, list.slice(0, 5).map((t) => h('li', null, t)), list.length > 5 ? h('li', { class: 'muted' }, `and ${list.length - 5} more`) : null) : null);
+    const musicUse = (id) => playouts.filter((p) => p.music && p.music.mediaId === id).map((p) => p.name);
+    main.append(h('h1', null, 'Media management'),
+      h('div', { class: 'lib-grid' },
+        card('#media', 'Media folders', `${files.length} files`, `${folders.length} folder${folders.length === 1 ? '' : 's'} · ${size(files)}`),
+        card('#media/video', 'Video', String(videos.length), `${length} of video · ${size(videos)}`),
+        card('#media/audio', 'Audio', String(files.filter((m) => m.type === 'audio').length), size(files.filter((m) => m.type === 'audio'))),
+        card('#media/ads', 'Ads', String(files.filter((m) => m.isAd).length), 'Files marked as ads (commercials)'),
+        card('#feeds', 'RSS feeds', String(feeds.length), null, feeds.map((f) => f.name)),
+        card('#streams', 'Input streams', String(streams.length), 'Icecast / Shoutcast audio', streams.map((m) => (musicUse(m.id).length ? `${m.name} (music in ${musicUse(m.id).join(', ')})` : m.name)))));
+  }
+
+  // ---------- media management: input streams ----------
+  async function pageStreams(main) {
+    const [all, playouts] = await Promise.all([GET('/api/media'), GET('/api/playouts')]);
+    const streams = all.filter((m) => m.external);
+    let player = null;
+    const edit = (m) => {
+      const data = { name: m ? m.name : '', url: m ? m.url : '' };
+      modal(m ? 'Edit input stream' : 'Add input stream', h('div', { class: 'stack' },
+        h('p', { class: 'muted' }, 'A Shoutcast or Icecast audio web stream. Use it as background music in a playout (Playout settings → Background music).'),
+        field('Name', bind(data, 'name', () => {}, 'text', { placeholder: 'e.g. Radio 1' })),
+        field('Stream URL', bind(data, 'url', () => {}, 'url', { placeholder: 'https://stream.example.com:8000/live.mp3' }))),
+      (close) => [h('button', { onclick: close }, 'Cancel'), h('button', { class: 'primary', onclick: async () => {
+        try {
+          if (m) await api('PATCH', `/api/media/${m.id}`, data); else await POST('/api/media/external', data);
+          close(); route();
+        } catch (err) { fail(err); }
+      } }, m ? 'Save' : 'Add')]);
+    };
+    const listen = (m, btn) => {
+      if (player && player.dataset.id === m.id) { player.pause(); player = null; btn.textContent = '▶ Listen'; return; }
+      if (player) player.pause();
+      document.querySelectorAll('.listen-btn').forEach((b) => { b.textContent = '▶ Listen'; });
+      player = new Audio(m.url);
+      player.dataset.id = m.id;
+      player.play().then(() => { btn.textContent = '■ Stop'; }).catch(() => { toast('Could not play this stream in your browser', 'err'); player = null; });
+    };
+    cleanup = () => { if (player) player.pause(); };
+    main.append(h('div', { class: 'row between' }, h('h1', null, 'Input streams'), h('button', { class: 'primary', onclick: () => edit(null) }, '+ Add input stream')),
+      streams.length ? h('div', { class: 'card' }, h('table', { class: 'list' },
+        h('thead', null, h('tr', null, h('th', null, 'Name'), h('th', null, 'Address'), h('th', null, 'Used by'), h('th'))),
+        h('tbody', null, streams.map((m) => {
+          const used = playouts.filter((p) => p.music && p.music.mediaId === m.id).map((p) => p.name);
+          const btn = h('button', { class: 'small listen-btn', onclick: () => listen(m, btn) }, '▶ Listen');
+          return h('tr', null, h('td', null, h('b', null, m.name)), h('td', null, h('code', null, m.url)), h('td', null, used.length ? used.join(', ') : h('span', { class: 'muted' }, 'Not used')),
+            h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } }, btn, ' ',
+              h('button', { class: 'small', onclick: () => edit(m) }, 'Edit'), ' ',
+              h('button', { class: 'small ghost', onclick: async () => { if (await confirmBox(`Delete "${m.name}"?${used.length ? ' Playouts that use it lose their background music.' : ''}`)) { await DEL(`/api/media/${m.id}`).catch(fail); route(); } } }, 'Delete')));
+        }))))
+        : h('p', { class: 'muted' }, 'No input streams yet. Add a Shoutcast or Icecast stream to use as background music.'));
+  }
+
+  // ---------- account ----------
+  async function pageAccount(main) {
+    main.append(h('h1', null, 'Your account'),
+      h('div', { class: 'grid two' },
         h('div', { class: 'card stack' }, h('h2', null, 'Appearance'),
           h('p', { class: 'muted' }, 'Choose a light or dark theme for your account, or follow your device setting.'),
           themeSwitch()),
-        h('div', { class: 'card stack' }, h('h2', null, 'Region'),
-          field('Time zone', bind(data, 'timezone', () => {}, 'text', { placeholder: 'Europe/Amsterdam' }), { hint: 'Used by the schedule, clocks and dates.' }),
-          field('Language for dates', bind(data, 'locale', () => {}, 'select', { options: [['en-GB', 'English (UK)'], ['en-US', 'English (US)'], ['nl-NL', 'Dutch'], ['de-DE', 'German'], ['fr-FR', 'French']] })),
-          h('button', { class: 'primary', onclick: async () => { try { await PUT('/api/settings', data); toast('Saved', 'ok'); } catch (err) { fail(err); } } }, 'Save')),
         h('div', { class: 'card stack' }, h('h2', null, 'Change password'), renderChangePassword(false))));
   }
 

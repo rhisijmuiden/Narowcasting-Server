@@ -36,7 +36,7 @@ update
 
 It fetches the latest version, installs it and restarts Beeldkrant, or tells you it is already up to date.
 
-The admin panel checks for a new version once a day. Admins then see a notice with an **Update now** button, which runs the same update; *System → Info* shows the version, build and changelog (and what a new version brings), with *Check now* and the update button. The panel starts the update through the `beeldkrant-update.path` and `beeldkrant-update.service` systemd units, so the web server itself never needs root. Your playouts, media and settings in `/var/lib/beeldkrant` are kept. `update --force` reinstalls the current version. To follow another branch, put `BEELDKRANT_REF=<branch>` in `/etc/default/beeldkrant`.
+The admin panel checks for a new version once a day. Admins then see a notice with an **Update now** button, which runs the same update; The **Info** button at the bottom left of the menu shows the version, build and changelog (and what a new version brings), with *Check now* and the update button. Before updating, the panel offers to make a local backup of the application and database, optionally with the media; the update only starts when that backup succeeded. The panel starts the update through the `beeldkrant-update.path` and `beeldkrant-update.service` systemd units, so the web server itself never needs root. Your playouts, media and settings in `/var/lib/beeldkrant` are kept. `update --force` reinstalls the current version. To follow another branch, put `BEELDKRANT_REF=<branch>` in `/etc/default/beeldkrant`.
 
 Useful overrides: `mode=default` skips the wizard, `var_gpu=no` turns GPU passthrough off, `BEELDKRANT_REF=<branch>` installs another branch.
 
@@ -78,10 +78,10 @@ Transitions: fade, crossfade, cut, slide (left/right/up/down), zoom, wipe, circl
 | Images | jpg, png, gif, webp, svg, bmp |
 | Video | mp4 (H.264), webm, mov, mkv |
 | Audio | mp3, m4a, aac, ogg, wav, flac |
-| External | Shoutcast/Icecast audio streams (Media → *Add audio stream*) |
-| RSS / Atom | Media → *RSS feeds* |
+| Input streams | Shoutcast/Icecast audio streams (Media management → *Input streams*) |
+| RSS / Atom | Media management → *RSS feeds* |
 
-Keep media tidy in **folders**: create folders (and subfolders) under Media, upload straight into the folder you have open, and move files by dragging them onto a folder or a breadcrumb, or with *Move*. Deleting a folder keeps its files: they move up one level. The media pickers in the scene editor browse the same folders and can search all of them.
+*Media management* opens with an overview of everything you have: files and folders, video, audio, ads, RSS feeds and input streams. Keep media tidy in **folders**: create folders (and subfolders) under *Media folders*, upload straight into the folder you have open, and move files by dragging them onto a folder or a breadcrumb, or with *Move*. Deleting a folder keeps its files: they move up one level. The media pickers in the scene editor browse the same folders and can search all of them. *Video*, *Audio* and *Ads* list those files across all folders. Mark a file as an ad (commercial) with its *Ad* button, or upload under *Ads* to mark new files straight away.
 
 ## Stream output
 
@@ -92,15 +92,15 @@ Under *Stream output* you set:
 - frame rate, video and audio bitrate
 - encoder: CPU (x264), Intel/AMD GPU (VAAPI) or NVIDIA GPU (NVENC)
 
-Start, stop and watch the stream (state, fps, bitrate and renderer log) on the dashboard.
+Start, stop and watch the stream (state, fps, bitrate and renderer log) on the dashboard. *Dashboard → Statistics* shows the load, CPU, memory, the outgoing stream and network traffic in Mbit/s and the free disk space, with charts of the last 15 minutes.
 
 ## Look and feel
 
-Under *Settings* you can rename the panel (shown in the menu, on the login page and in the browser tab). Each user picks a light or dark theme, or *Auto* to follow the device, with the switch at the bottom of the menu.
+Under *Settings → Application* you rename the panel (shown in the menu, on the login page and in the browser tab) and, as an admin, set the server address and the web port. A new port takes effect right away and the panel moves you there; it is stored in the database and wins over the `PORT` the service starts with. Each user picks a light or dark theme, or *Auto* to follow the device, with the switch at the bottom of the menu; your name at the bottom opens your account (theme and password).
 
 ## Backups
 
-Under *System → Backups* (admins only):
+Under *Settings → Backups* (admins only):
 
 - **What to back up**: the application (program code, without installed packages), the database (playouts, scenes, schedule, feeds, media list and folders, users and settings) and the media (all files in all folders). Put everything in one archive, or make a separate archive per part so the large media stays apart.
 - **Schedule**: automatic backups on chosen days at a set time (in the time zone from *Settings*), plus a *Back up now* button.
