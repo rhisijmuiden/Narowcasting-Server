@@ -14,7 +14,7 @@ const LOG_FILE = path.join(store.DATA_DIR, 'update.log');
 const PATH_UNIT = '/etc/systemd/system/beeldkrant-update.path';
 const DAY = 24 * 60 * 60 * 1000;
 
-const state = { latest: null, checkedAt: null, error: null };
+const state = { latest: null, checkedAt: null, error: null, incoming: null };
 
 function run(cmd, args, timeout = 30000) {
   return new Promise((resolve, reject) => {
@@ -37,11 +37,29 @@ async function check() {
     const out = await git('ls-remote', 'origin', `refs/heads/${REF}`);
     state.latest = out.split(/\s+/)[0] || null;
     state.error = state.latest ? null : `Branch ${REF} not found`;
+    state.incoming = state.latest && state.latest !== (await current()) ? await incomingChangelog() : null;
   } catch (err) {
     state.error = 'Could not reach the repository';
   }
   state.checkedAt = new Date().toISOString();
   return status();
+}
+
+async function commitDate() {
+  try { return await git('log', '-1', '--format=%cI'); } catch { return null; }
+}
+
+function changelog() {
+  try { return fs.readFileSync(path.join(APP_DIR, 'CHANGELOG.md'), 'utf8'); } catch { return ''; }
+}
+
+// The changelog of the newer version, so the panel can show what an update brings.
+// Fetching only touches FETCH_HEAD; `update` fetches the same way.
+async function incomingChangelog() {
+  try {
+    await run('git', ['-c', `safe.directory=${APP_DIR}`, '-C', APP_DIR, 'fetch', '--quiet', '--depth', '1', 'origin', REF], 120000);
+    return await git('show', 'FETCH_HEAD:CHANGELOG.md');
+  } catch { return null; }
 }
 
 async function status() {
@@ -56,6 +74,7 @@ async function status() {
     available: !!(commit && state.latest && commit !== state.latest),
     checkedAt: state.checkedAt,
     error: state.error,
+    incoming: state.incoming,
     // The panel can only start updates on an installed container (git checkout + systemd units).
     canUpdate: !!commit && fs.existsSync(PATH_UNIT),
     requested: fs.existsSync(REQUEST_FILE),
@@ -74,4 +93,4 @@ function start() {
   setInterval(check, DAY);
 }
 
-module.exports = { check, status, requestUpdate, start };
+module.exports = { check, status, requestUpdate, start, commitDate, changelog };

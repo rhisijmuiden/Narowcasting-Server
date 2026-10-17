@@ -12,6 +12,7 @@ const weather = require('./weather');
 const schedule = require('./schedule');
 const stream = require('./stream');
 const updater = require('./updater');
+const backup = require('./backup');
 const pkg = require('../package.json');
 
 const PORT = Number(process.env.PORT) || 8080;
@@ -407,6 +408,80 @@ app.post('/api/system/update', auth.requireRole('admin'), wrap(async (req, res) 
   res.json(await updater.status());
 }));
 
+// System info (admins only): build, changelog and the machine it runs on.
+app.get('/api/system/info', auth.requireRole('admin'), wrap(async (req, res) => {
+  const update = await updater.status();
+  res.json({
+    ...update,
+    builtAt: await updater.commitDate(),
+    changelog: updater.changelog(),
+    node: process.version,
+    uptime: Math.round(process.uptime()),
+    dataDir: store.DATA_DIR,
+  });
+}));
+
+// Backups (admins only). Secrets of the external location are never sent back to the browser.
+const admin = auth.requireRole('admin');
+function publicBackupConfig() {
+  const cfg = store.getSection('backup');
+  const { password, privateKey, ...remote } = cfg.remote;
+  return { ...cfg, remote: { ...remote, hasPassword: !!password, hasPrivateKey: !!privateKey } };
+}
+// Merges the remote settings from the browser with the stored secrets it did not change.
+function backupRemote(input) {
+  const stored = store.getSection('backup').remote;
+  const r = { ...stored, ...(input || {}) };
+  delete r.hasPassword; delete r.hasPrivateKey;
+  if (!['none', 'ftp', 'ftps', 'sftp'].includes(r.type)) throw new Error('Unknown backup location type');
+  if (input && input.password === undefined) r.password = stored.password;
+  if (input && input.privateKey === undefined) r.privateKey = stored.privateKey;
+  r.host = String(r.host || '').trim();
+  r.port = r.port ? Number(r.port) : null;
+  r.path = String(r.path || '/').trim() || '/';
+  r.allowSelfSigned = !!r.allowSelfSigned;
+  return r;
+}
+app.get('/api/backups/config', admin, (req, res) => res.json(publicBackupConfig()));
+app.put('/api/backups/config', admin, (req, res) => {
+  const b = req.body || {};
+  const cfg = store.getSection('backup');
+  const next = {
+    parts: Object.fromEntries(backup.PARTS.map((p) => [p, !!(b.parts || cfg.parts)[p]])),
+    layout: b.layout === 'separate' ? 'separate' : 'single',
+    keepLocal: Math.max(0, Math.min(365, Number(b.keepLocal ?? cfg.keepLocal) || 0)),
+    keepRemote: Math.max(1, Math.min(365, Number(b.keepRemote ?? cfg.keepRemote) || 1)),
+    schedule: { ...cfg.schedule, ...(b.schedule || {}) },
+    remote: backupRemote(b.remote),
+  };
+  if (!/^\d{2}:\d{2}$/.test(next.schedule.time || '')) return res.status(400).json({ error: 'Enter the time as HH:MM' });
+  next.schedule.days = (next.schedule.days || []).filter((d) => schedule.DAYS.includes(d));
+  next.schedule.enabled = !!next.schedule.enabled;
+  store.setSection('backup', next);
+  res.json(publicBackupConfig());
+});
+app.post('/api/backups/test', admin, wrap(async (req, res) => {
+  const remote = backupRemote((req.body || {}).remote);
+  const files = await backup.withRemote(remote, (r) => r.list());
+  res.json({ ok: true, backups: files.filter((f) => backup.NAME_RE.test(f.name)).length });
+}));
+app.get('/api/backups/status', admin, (req, res) => res.json(backup.status()));
+app.get('/api/backups', admin, wrap(async (req, res) => res.json(await backup.listSets(req.query.location === 'remote' ? 'remote' : 'local'))));
+app.post('/api/backups/run', admin, (req, res) => { backup.runBackup(); res.json(backup.status()); });
+app.post('/api/backups/restore', admin, (req, res) => {
+  const { location, id, parts } = req.body || {};
+  backup.runRestore({ location: location === 'remote' ? 'remote' : 'local', id: String(id || ''), parts: Array.isArray(parts) ? parts : [] });
+  res.json(backup.status());
+});
+app.delete('/api/backups/:id', admin, wrap(async (req, res) => {
+  await backup.removeSet(req.query.location === 'remote' ? 'remote' : 'local', req.params.id);
+  res.json({ ok: true });
+}));
+app.get('/api/backups/download/:name', admin, (req, res) => {
+  if (!backup.NAME_RE.test(req.params.name)) return res.status(404).json({ error: 'Not found' });
+  res.download(path.join(backup.BACKUP_DIR, req.params.name));
+});
+
 // ---------- admin UI ----------
 app.use('/admin', express.static(path.join(PUBLIC, 'admin')));
 app.get('/', (req, res) => res.redirect('/admin/'));
@@ -419,6 +494,7 @@ app.use((err, req, res, next) => {
 app.listen(PORT, HOST, () => {
   console.log(`Beeldkrant ${pkg.version} admin panel on http://${HOST}:${PORT}/admin/`);
   updater.start();
+  backup.start();
   if (store.getSection('output').enabled) {
     stream.start().catch((err) => console.error('Could not resume stream:', err.message));
   }

@@ -1,8 +1,8 @@
-# Runs the same `update` command as the container shell, as root, on request of the admin panel.
+# Runs the same `update` command as the container shell, as root, on request of the admin panel:
+# an update, or putting back the application from a backup.
 [Unit]
 Description=Update Beeldkrant
 
 [Service]
 Type=oneshot
-ExecStartPre=/bin/rm -f /var/lib/beeldkrant/update-request
-ExecStart=/bin/sh -c '/usr/bin/update > /var/lib/beeldkrant/update.log 2>&1'
+ExecStart=/bin/sh -c '/usr/bin/update --request /var/lib/beeldkrant/update-request > /var/lib/beeldkrant/update.log 2>&1'

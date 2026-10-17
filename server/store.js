@@ -41,6 +41,15 @@ function defaults() {
       audio: true,
       encoder: 'libx264',
     },
+    backup: {
+      parts: { app: true, database: true, media: true },
+      // 'single': one archive with every part; 'separate': one archive per part
+      layout: 'single',
+      schedule: { enabled: false, days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'], time: '03:00' },
+      keepLocal: 5,
+      keepRemote: 14,
+      remote: { type: 'none', host: '', port: null, username: '', password: '', privateKey: '', path: '/beeldkrant-backups', allowSelfSigned: false },
+    },
   };
 }
 
@@ -49,18 +58,30 @@ let db = load();
 
 function load() {
   try {
-    const raw = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    const base = defaults();
-    return {
-      ...base,
-      ...raw,
-      settings: { ...base.settings, ...raw.settings },
-      output: { ...base.output, ...raw.output },
-    };
+    return merge(JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
   } catch (err) {
     if (err.code !== 'ENOENT') console.error('Could not read data file, starting fresh:', err.message);
     return defaults();
   }
+}
+
+// Fills in defaults for anything an older data file does not have yet.
+function merge(raw) {
+  const base = defaults();
+  const backup = raw.backup || {};
+  return {
+    ...base,
+    ...raw,
+    settings: { ...base.settings, ...raw.settings },
+    output: { ...base.output, ...raw.output },
+    backup: {
+      ...base.backup,
+      ...backup,
+      parts: { ...base.backup.parts, ...backup.parts },
+      schedule: { ...base.backup.schedule, ...backup.schedule },
+      remote: { ...base.backup.remote, ...backup.remote },
+    },
+  };
 }
 
 function save() {
@@ -115,6 +136,18 @@ function setSection(name, data) {
   return db[name];
 }
 
+// A copy of the whole database, for backups.
+function snapshot() {
+  return JSON.parse(JSON.stringify(db));
+}
+
+// Replaces the whole database, for restoring a backup.
+function replaceAll(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.users)) throw new Error('This is not a Beeldkrant database');
+  db = merge(raw);
+  save();
+}
+
 module.exports = {
   DATA_DIR,
   MEDIA_DIR,
@@ -128,4 +161,6 @@ module.exports = {
   remove,
   getSection,
   setSection,
+  snapshot,
+  replaceAll,
 };

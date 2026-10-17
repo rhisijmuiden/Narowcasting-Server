@@ -88,6 +88,9 @@ code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
 .nav a { color: var(--text); padding: 8px 10px; border-radius: 6px; display: flex; align-items: center; gap: 8px; }
 .nav a:hover { background: var(--panel-2); }
 .nav a.active { background: var(--accent); color: #fff; }
+.nav a.open { color: var(--text); font-weight: 600; }
+.nav a.sub { padding: 6px 10px 6px 24px; font-size: 13px; color: var(--muted); }
+.nav a.sub.active { color: #fff; }
 .nav .spacer { flex: 1; }
 .nav .who { color: var(--muted); padding: 8px 10px; font-size: 12px; }
 .main { overflow: auto; padding: 24px 28px; }
@@ -125,6 +128,18 @@ label.field > span { display: block; font-size: 12px; color: var(--muted); margi
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 th { font-size: 12px; color: var(--muted); font-weight: 600; }
+table.kv td { padding: 6px 8px; }
+table.kv td:first-child { width: 120px; }
+.md h3 { text-transform: none; letter-spacing: 0; font-size: 15px; color: var(--text); margin: 18px 0 6px; }
+.md h3:first-child { margin-top: 0; }
+.md h4 { margin: 10px 0 4px; font-size: 13px; color: var(--muted); }
+.md ul { margin: 4px 0 8px; padding-left: 20px; }
+.md li { margin: 2px 0; }
+.md p { margin: 6px 0; }
+.whats-new summary { cursor: pointer; color: var(--accent); }
+.whats-new .md { margin-top: 8px; max-height: 260px; overflow: auto; }
+.day-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.day-chips button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 .badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 99px; font-size: 12px; background: var(--panel-2); border: 1px solid var(--line); }
 .badge.ok { background: rgba(48,164,108,.15); color: var(--ok-text); border-color: rgba(48,164,108,.4); }

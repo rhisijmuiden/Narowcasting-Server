@@ -36,7 +36,7 @@ update
 
 It fetches the latest version, installs it and restarts Beeldkrant, or tells you it is already up to date.
 
-The admin panel checks for a new version once a day. Admins then see a notice with an **Update now** button, which runs the same update; *Settings → Software update* has *Check now* and the update button too. The panel starts the update through the `beeldkrant-update.path` and `beeldkrant-update.service` systemd units, so the web server itself never needs root. Your playouts, media and settings in `/var/lib/beeldkrant` are kept. `update --force` reinstalls the current version. To follow another branch, put `BEELDKRANT_REF=<branch>` in `/etc/default/beeldkrant`.
+The admin panel checks for a new version once a day. Admins then see a notice with an **Update now** button, which runs the same update; *System → Info* shows the version, build and changelog (and what a new version brings), with *Check now* and the update button. The panel starts the update through the `beeldkrant-update.path` and `beeldkrant-update.service` systemd units, so the web server itself never needs root. Your playouts, media and settings in `/var/lib/beeldkrant` are kept. `update --force` reinstalls the current version. To follow another branch, put `BEELDKRANT_REF=<branch>` in `/etc/default/beeldkrant`.
 
 Useful overrides: `mode=default` skips the wizard, `var_gpu=no` turns GPU passthrough off, `BEELDKRANT_REF=<branch>` installs another branch.
 
@@ -97,6 +97,17 @@ Start, stop and watch the stream (state, fps, bitrate and renderer log) on the d
 ## Look and feel
 
 Under *Settings* you can rename the panel (shown in the menu, on the login page and in the browser tab). Each user picks a light or dark theme, or *Auto* to follow the device, with the switch at the bottom of the menu.
+
+## Backups
+
+Under *System → Backups* (admins only):
+
+- **What to back up**: the application (program code, without installed packages), the database (playouts, scenes, schedule, feeds, media list and folders, users and settings) and the media (all files in all folders). Put everything in one archive, or make a separate archive per part so the large media stays apart.
+- **Schedule**: automatic backups on chosen days at a set time (in the time zone from *Settings*), plus a *Back up now* button.
+- **External location**: FTP, FTPS (FTP over TLS) or SCP/SFTP over SSH with a password or a private key. *Test connection* checks the login and the folder. Copies are uploaded after each backup and the oldest are removed beyond the number to keep. Passwords and keys stay on the server and are never sent back to the browser.
+- **Restore**: pick a backup on this server or on the external location and choose which parts to put back. Restoring the application hands over to the update service, which replaces the code, reinstalls packages and restarts Beeldkrant (from the shell: `update --restore-app <unpacked app folder>`).
+
+Backups are named `beeldkrant_<date>_<time>_<parts>.tar.gz` and kept in `/var/lib/beeldkrant/backups`; backups there can also be downloaded from the panel. Each archive holds a `manifest.json` and `app/`, `database/data.json` and/or `media/`.
 
 ## Users
 
