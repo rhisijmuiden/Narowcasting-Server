@@ -49,6 +49,10 @@ function defaults() {
       audio: true,
       encoder: 'libx264',
     },
+    // Password policy (users with Microsoft sign-in follow Entra's policy instead).
+    security: { passwordPolicy: { minLength: 8, requireSpecial: false, requireMixed: false, expiryDays: 0 } },
+    // Microsoft Entra ID single sign-on.
+    sso: { enabled: false, tenantId: '', clientId: '', clientSecret: '', buttonLabel: 'Sign in with Microsoft', provisioning: false, defaultRole: 'readonly', defaultPermissions: {}, roleClaims: { admin: '', user: '', readonly: '' } },
     backup: {
       parts: { app: true, database: true, media: true },
       // 'single': one archive with every part; 'separate': one archive per part
@@ -87,6 +91,8 @@ function merge(raw) {
     settings: { ...base.settings, ...raw.settings },
     output: { ...base.output, ...raw.output },
     connections: { ...base.connections, ...raw.connections },
+    security: { ...base.security, ...raw.security, passwordPolicy: { ...base.security.passwordPolicy, ...(raw.security || {}).passwordPolicy } },
+    sso: { ...base.sso, ...raw.sso, roleClaims: { ...base.sso.roleClaims, ...(raw.sso || {}).roleClaims } },
     backup: {
       ...base.backup,
       ...backup,

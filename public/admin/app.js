@@ -353,7 +353,7 @@
     '-',
     ['output', 'Outputs', [['routing', 'Routing']]],
     '-',
-    ['settings', 'Settings', [['settings', 'Application'], ['backups', 'Backups', null, { admin: true }]]],
+    ['settings', 'Settings', [['settings', 'Application'], ['users', 'Users and roles', [['sso', 'Configure SSO']], { admin: true }], ['security', 'Security', null, { admin: true }], ['backups', 'Backups', null, { perm: 'backups' }]]],
   ];
   let cleanup = null;
 
@@ -363,6 +363,7 @@
     const isAdmin = me.user.role === 'admin';
     const link = ([hash, label, children, opts = {}], depth) => {
       if (opts.admin && !isAdmin) return null;
+      if (opts.perm && !can(opts.perm)) return null;
       const inside = menuHashes([hash, label, children]).includes(current);
       let open = !opts.dropdown || inside;
       if (opts.dropdown) { try { open = open || localStorage.getItem(`bk-menu-${hash}`) === 'open'; } catch { /* private mode */ } }
@@ -406,60 +407,131 @@
         h('div', { class: 'spacer' }),
         me.user.role === 'admin' ? infoButton(page === 'info') : null,
         themeSwitch(),
-        h('a', { href: '#account', class: `who ${page === 'account' ? 'active' : ''}`, title: 'Your account' }, `${me.user.username} (${me.user.role})`),
+        h('a', { href: '#account', class: `who ${page === 'account' ? 'active' : ''}`, title: 'Your account' }, `${me.user.displayName || me.user.username} (${ROLE_LABELS[me.user.role] || me.user.role})`),
         h('a', { href: '#', onclick: async (e) => { e.preventDefault(); await POST('/api/logout'); me = null; route(); } }, 'Log out'),
       ),
       main));
     if (me.user.role === 'admin' && page !== 'info') updateBanner(main);
+    if (me.user.role === 'readonly') main.append(h('div', { class: 'ro-banner' }, icon('eye'), 'Read only: you can look at everything, but not change anything.'));
     const pages = {
       dashboard: pageDashboard, stats: pageStats, playouts: pagePlayouts, library: pageLibrary, media: pageMedia, feeds: pageFeeds, streams: pageStreams, cameras: pageCameras,
       schedule: pageSchedule, output: pageOutput, routing: pageRouting, settings: pageSettings, backups: pageBackups, info: pageInfo, account: pageAccount,
+      users: pageUsers, sso: pageSso, security: pageSecurity,
     };
     try { await (pages[page] || pageDashboard)(main, arg); } catch (err) { fail(err); }
   }
   window.addEventListener('hashchange', () => { if (!editorGuard()) route(); });
 
   // ---------- login ----------
-  function renderLogin() {
-    const user = h('input', { value: 'admin', autocomplete: 'username' });
+  const ROLE_LABELS = { admin: 'Admin', user: 'User', readonly: 'Read only' };
+  const can = (perm) => !!me && !!me.user && (me.user.role === 'admin' || !!(me.user.permissions || {})[perm]);
+  const MS_LOGO = '<svg viewBox="0 0 21 21" width="18" height="18" aria-hidden="true"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>';
+  const msLogo = () => { const s = document.createElement('span'); s.className = 'ms-logo'; s.innerHTML = MS_LOGO; return s; };
+  const loggedIn = (res) => { applyTheme(res.user.theme); me = { ...me, user: res.user }; route(); };
+
+  async function renderLogin() {
+    const opts = await GET('/api/auth/options').catch(() => ({}));
+    const params = new URLSearchParams(location.search);
+    const ssoError = params.get('sso_error');
+    if (ssoError) history.replaceState(null, '', location.pathname + location.hash);
+    const user = h('input', { value: '', autocomplete: 'username', placeholder: 'admin' });
     const pass = h('input', { type: 'password', autocomplete: 'current-password' });
     const submit = async (e) => {
       e.preventDefault();
       try {
-        const res = await POST('/api/login', { username: user.value, password: pass.value });
-        applyTheme(res.user.theme);
-        me = { ...me, user: res.user };
-        route();
+        const res = await POST('/api/login', { username: user.value || 'admin', password: pass.value });
+        if (res.mfa) renderMfa(res); else loggedIn(res);
       } catch (err) { fail(err); }
     };
     put(app, h('div', { class: 'login' }, h('form', { class: 'card stack', onsubmit: submit },
       brand(),
+      ssoError ? h('div', { class: 'cam-result err' }, h('b', null, 'Microsoft sign-in failed'), h('span', null, ssoError)) : null,
+      opts.sso ? h('a', { class: 'btn ms-btn', href: '/api/sso/start' }, msLogo(), opts.sso.label) : null,
+      opts.sso ? h('div', { class: 'login-or' }, h('span', null, 'or with a password')) : null,
       field('Username', user), field('Password', pass),
       h('button', { class: 'primary', type: 'submit' }, 'Log in'),
       h('div', { class: 'hint' }, 'First login: use the one-time password shown at the end of the installation.'),
     )));
-    pass.focus();
+    (opts.sso ? user : pass).focus();
+  }
+
+  // The second login step: a code from the authenticator app, or setting the app up.
+  function renderMfa(step) {
+    const code = h('input', { inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: '123 456', class: 'code-input', maxlength: 11 });
+    const submit = async (e) => {
+      e.preventDefault();
+      try {
+        const res = await POST('/api/login/mfa', { ticket: step.ticket, code: code.value });
+        if (res.recoveryCodes) showRecoveryCodes(res.recoveryCodes, () => loggedIn(res)); else loggedIn(res);
+      } catch (err) { fail(err); code.select(); }
+    };
+    const back = h('a', { href: '#', onclick: (e) => { e.preventDefault(); renderLogin(); } }, 'Back to login');
+    const form = step.mfa === 'setup'
+      ? h('form', { class: 'card stack mfa-card', onsubmit: submit },
+        brand(),
+        h('h2', null, 'Set up two-step verification'),
+        h('p', { class: 'muted' }, 'Your account needs a code from an authenticator app at every login.'),
+        mfaSetupSteps(step.secret, step.otpauth, code),
+        h('div', { class: 'login-actions' }, h('button', { class: 'primary', type: 'submit' }, 'Turn on and log in'), back))
+      : h('form', { class: 'card stack', onsubmit: submit },
+        brand(),
+        h('h2', null, 'Two-step verification'),
+        h('p', { class: 'muted' }, 'Enter the 6-digit code from your authenticator app.'),
+        field('Code', code, { hint: 'Lost your phone? Enter one of your recovery codes instead.' }),
+        h('div', { class: 'login-actions' }, h('button', { class: 'primary', type: 'submit' }, 'Verify'), back));
+    put(app, h('div', { class: 'login' }, form));
+    code.focus();
+  }
+
+  // QR code, key and code field for linking an authenticator app.
+  function mfaSetupSteps(secret, otpauth, codeInput) {
+    return h('ol', { class: 'mfa-steps' },
+      h('li', null, h('b', null, 'Install an authenticator app'), h('div', { class: 'hint' }, 'Such as Microsoft Authenticator, Google Authenticator, 1Password or Authy.')),
+      h('li', null, h('b', null, 'Scan this QR code with the app'),
+        h('div', { class: 'mfa-qr' }, h('img', { src: `/api/qr?text=${encodeURIComponent(otpauth)}`, alt: 'QR code for the authenticator app' }),
+          h('div', { class: 'hint' }, 'Or enter this key by hand:', h('code', { class: 'mfa-key' }, secret.replace(/(.{4})/g, '$1 ').trim())))),
+      h('li', null, h('b', null, 'Enter the 6-digit code the app shows'), codeInput));
+  }
+
+  function showRecoveryCodes(codes, onDone) {
+    const text = codes.join('\n');
+    const body = h('div', { class: 'stack' },
+      h('p', null, 'Two-step verification is on. Keep these recovery codes somewhere safe: each one logs you in once if you lose your phone. They are shown only now.'),
+      h('div', { class: 'recovery-codes' }, codes.map((c) => h('code', null, c))),
+      h('div', { class: 'row' },
+        h('button', { type: 'button', onclick: () => navigator.clipboard.writeText(text).then(() => toast('Copied', 'ok'), () => toast('Copy did not work; select the codes instead', 'err')) }, icon('copy'), 'Copy'),
+        h('button', { type: 'button', onclick: () => { const a = h('a', { href: URL.createObjectURL(new Blob([`${text}\n`], { type: 'text/plain' })), download: 'beeldkrant-recovery-codes.txt' }); a.click(); } }, 'Download')));
+    if (me && me.user && !me.user.mustChangePassword && document.querySelector('.shell')) {
+      modal('Your recovery codes', body, (close) => [h('button', { class: 'primary', onclick: () => { close(); onDone(); } }, 'I have saved them')]);
+    } else {
+      put(app, h('div', { class: 'login' }, h('div', { class: 'card stack mfa-card' }, brand(), h('h2', null, 'Save your recovery codes'), body,
+        h('button', { class: 'primary', onclick: onDone }, 'I have saved them, continue'))));
+    }
   }
 
   function renderChangePassword(forced) {
     const cur = h('input', { type: 'password', autocomplete: 'current-password' });
     const p1 = h('input', { type: 'password', autocomplete: 'new-password' });
     const p2 = h('input', { type: 'password', autocomplete: 'new-password' });
+    const pol = (me && me.passwordPolicy) || { minLength: 8 };
+    const rules = [`at least ${pol.minLength} characters`, pol.requireSpecial ? 'a special character' : null, pol.requireMixed ? 'upper and lower case letters and a number' : null].filter(Boolean).join(', ');
     const submit = async (e) => {
       e.preventDefault();
       if (p1.value !== p2.value) return toast('The new passwords do not match', 'err');
       try {
         await POST('/api/password', { current: cur.value, password: p1.value });
         me.user.mustChangePassword = false;
+        me.user.passwordExpired = false;
         toast('Password changed', 'ok');
         if (forced) route();
         else { cur.value = p1.value = p2.value = ''; }
       } catch (err) { fail(err); }
     };
+    const expired = me && me.user && me.user.passwordExpired;
     const form = h('form', { class: 'card stack', onsubmit: submit },
       forced ? brand() : null,
-      forced ? h('p', null, 'You are using a one-time password. Choose your own password to continue.') : null,
-      field(forced ? 'One-time password' : 'Current password', cur), field('New password (at least 8 characters)', p1), field('Repeat new password', p2),
+      forced ? h('p', null, expired ? 'Your password has expired. Choose a new password to continue.' : 'You are using a one-time password. Choose your own password to continue.') : null,
+      field(forced && !expired ? 'One-time password' : 'Current password', cur), field('New password', p1, { hint: `Use ${rules}.` }), field('Repeat new password', p2),
       h('button', { class: 'primary', type: 'submit' }, 'Change password'));
     if (forced) put(app, h('div', { class: 'login' }, form));
     return form;
@@ -2304,7 +2376,255 @@
         h('div', { class: 'card stack' }, h('h2', null, 'Appearance'),
           h('p', { class: 'muted' }, 'Choose a light or dark theme for your account, or follow your device setting.'),
           themeSwitch()),
-        h('div', { class: 'card stack' }, h('h2', null, 'Change password'), renderChangePassword(false))));
+        me.user.authMethod === 'sso'
+          ? h('div', { class: 'card stack' }, h('h2', null, 'Sign-in'), h('div', { class: 'row' }, msLogo(), h('b', null, 'You sign in with Microsoft')),
+            h('p', { class: 'muted' }, 'Your password and two-step verification are managed by Microsoft Entra ID.'))
+          : h('div', { class: 'card stack' }, h('h2', null, 'Change password'), renderChangePassword(false)),
+        me.user.authMethod === 'sso' ? null : mfaCard(),
+        h('div', { class: 'card stack' }, h('h2', null, 'Role'),
+          h('p', null, h('b', null, ROLE_LABELS[me.user.role]), ' · ', me.user.role === 'admin' ? 'you can do everything.' : me.user.role === 'readonly' ? 'you can look at everything, but not change anything.' : 'you can change:'),
+          me.user.role === 'user' ? h('ul', { class: 'perm-list' }, Object.entries(me.permissionLabels || {}).map(([k, label]) => h('li', { class: me.user.permissions[k] ? 'on' : 'off' }, me.user.permissions[k] ? '✓ ' : '✕ ', label))) : null)));
+  }
+
+  function mfaCard() {
+    const card = h('div', { class: 'card stack' });
+    const draw = () => put(card, h('h2', null, 'Two-step verification'),
+      h('p', { class: 'muted' }, 'Asks for a code from an authenticator app on your phone at every login.'),
+      h('div', { class: 'row' }, me.user.mfaEnabled ? h('span', { class: 'badge ok' }, 'On') : h('span', { class: 'badge' }, 'Off'),
+        me.user.mfaRequired ? h('span', { class: 'hint', style: { marginTop: 0 } }, 'Required for your account by an admin') : null),
+      me.user.mfaEnabled
+        ? (me.user.mfaRequired ? null : h('button', { class: 'danger-outline', onclick: turnOff }, 'Turn off'))
+        : h('button', { class: 'primary', onclick: setup }, 'Set up'));
+    const setup = async () => {
+      const s = await POST('/api/me/mfa/setup').catch(fail);
+      if (!s) return;
+      const code = h('input', { inputmode: 'numeric', autocomplete: 'one-time-code', placeholder: '123 456', class: 'code-input', maxlength: 7 });
+      modal('Set up two-step verification', mfaSetupSteps(s.secret, s.otpauth, code), (close) => [
+        h('button', { onclick: close }, 'Cancel'),
+        h('button', { class: 'primary', onclick: async () => {
+          try {
+            const r = await POST('/api/me/mfa/enable', { secret: s.secret, code: code.value });
+            close(); me.user.mfaEnabled = true; draw();
+            showRecoveryCodes(r.recoveryCodes, () => {});
+          } catch (err) { fail(err); }
+        } }, 'Turn on')]);
+      code.focus();
+    };
+    const turnOff = () => {
+      const pw = h('input', { type: 'password', autocomplete: 'current-password' });
+      modal('Turn off two-step verification', field('Your password', pw), (close) => [h('button', { onclick: close }, 'Cancel'),
+        h('button', { class: 'danger', onclick: async () => { try { await api('DELETE', '/api/me/mfa', { password: pw.value }); close(); me.user.mfaEnabled = false; draw(); } catch (err) { fail(err); } } }, 'Turn off')]);
+      pw.focus();
+    };
+    draw();
+    return card;
+  }
+
+  // ---------- settings: users and roles ----------
+  const AUTH_LABEL = (u) => (u.authMethod === 'sso' ? 'Microsoft' : 'Password');
+  const ago = (iso) => {
+    if (!iso) return 'Never';
+    const s = Math.round((Date.now() - Date.parse(iso)) / 1000);
+    return s < 60 ? 'Just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`;
+  };
+  function roleSeg(data, onChange) {
+    return h('div', { class: 'seg seg-wide' }, ['admin', 'user', 'readonly'].map((r) => h('button', { type: 'button', class: data.role === r ? 'active' : '', onclick: () => { data.role = r; onChange(); } }, ROLE_LABELS[r])));
+  }
+  const ROLE_HELP = { admin: 'Can do everything, including users, security and updates.', user: 'Can change only the parts you switch on below; can look at everything else.', readonly: 'Can look at everything, but not change anything.' };
+  function permissionChecks(perms, labels) {
+    return h('div', { class: 'perm-grid' }, Object.entries(labels).map(([k, label]) => h('label', { class: 'check' },
+      h('input', { type: 'checkbox', checked: !!perms[k], onchange: (e) => { perms[k] = e.target.checked; } }), label)));
+  }
+
+  async function pageUsers(main) {
+    const [users, ssoCfg] = await Promise.all([GET('/api/users'), GET('/api/sso')]);
+    const labels = me.permissionLabels || {};
+    const ssoOn = ssoCfg.enabled && ssoCfg.tenantId && ssoCfg.clientId && ssoCfg.hasClientSecret;
+
+    const edit = (u) => {
+      const data = u ? { ...clone(u), password: '', permissions: { ...u.permissions } } : { username: '', displayName: '', email: '', role: 'user', permissions: { playouts: true, media: true, schedule: true }, authMethod: 'password', password: '', mustChangePassword: true, mfaRequired: false };
+      const body = h('div', { class: 'stack' });
+      const draw = () => put(body,
+        h('div', { class: 'fields' },
+          field('User name', bind(data, 'username', () => {}, 'text', { placeholder: 'e.g. jdevries or j.devries@example.com' })),
+          field('Display name', bind(data, 'displayName', () => {}, 'text', { placeholder: 'Jan de Vries' })),
+          field('E-mail', bind(data, 'email', () => {}, 'email', { placeholder: 'j.devries@example.com' }), { wide: true, hint: data.authMethod === 'sso' ? 'The address (user principal name) this user signs in with at Microsoft.' : null })),
+        h('div', null, h('div', { class: 'label' }, 'Role'), roleSeg(data, draw), h('div', { class: 'hint' }, ROLE_HELP[data.role])),
+        data.role === 'user' ? h('div', null, h('div', { class: 'label' }, 'This user can change'), permissionChecks(data.permissions, labels)) : null,
+        h('div', null, h('div', { class: 'label' }, 'Sign-in'),
+          h('div', { class: 'seg seg-wide' },
+            h('button', { type: 'button', class: data.authMethod === 'password' ? 'active' : '', onclick: () => { data.authMethod = 'password'; draw(); } }, 'Password'),
+            h('button', { type: 'button', class: data.authMethod === 'sso' ? 'active' : '', onclick: () => { data.authMethod = 'sso'; draw(); } }, msLogo(), 'Microsoft Entra SSO')),
+          data.authMethod === 'sso' && !ssoOn ? h('div', { class: 'cam-result err' }, h('span', null, 'Microsoft sign-in is not set up yet. ', h('a', { href: '#sso' }, 'Configure SSO'))) : null),
+        data.authMethod === 'password' ? h('div', { class: 'fields' },
+          field(u ? 'New password (leave empty to keep it)' : 'Password', bind(data, 'password', () => {}, 'password', { autocomplete: 'new-password' }), { hint: policyHint() }),
+          h('div', { class: 'stack', style: { paddingTop: '20px' } },
+            u ? null : h('label', { class: 'check' }, bind(data, 'mustChangePassword', () => {}, 'checkbox'), 'Must choose a new password at first login'),
+            h('label', { class: 'check' }, bind(data, 'mfaRequired', () => {}, 'checkbox'), 'Two-step verification required'))) : h('p', { class: 'hint' }, 'The password policy and two-step verification of Beeldkrant do not apply: Microsoft Entra ID handles them.'),
+        u ? h('label', { class: 'check' }, bind(data, 'disabled', () => {}, 'checkbox'), 'Disabled (cannot log in)') : null,
+        u && u.mfaEnabled ? h('div', { class: 'row' }, h('span', { class: 'badge ok' }, 'Two-step verification set up'),
+          h('button', { class: 'small', type: 'button', onclick: async () => { if (await confirmBox(`Reset two-step verification of ${u.username}? They set it up again at their next login.`)) { await POST(`/api/users/${u.id}/mfa/reset`).catch(fail); toast('Two-step verification reset', 'ok'); } } }, 'Reset')) : null);
+      draw();
+      modal(u ? `Edit ${u.username}` : 'Add user', body, (close) => [h('button', { onclick: close }, 'Cancel'), h('button', { class: 'primary', onclick: async () => {
+        try {
+          const payload = { username: data.username, displayName: data.displayName, email: data.email, role: data.role, permissions: data.permissions, authMethod: data.authMethod, mfaRequired: data.mfaRequired, disabled: data.disabled };
+          if (data.password) payload.password = data.password;
+          if (!u) payload.mustChangePassword = data.mustChangePassword;
+          if (u) await PUT(`/api/users/${u.id}`, payload); else await POST('/api/users', payload);
+          close(); route();
+        } catch (err) { fail(err); }
+      } }, u ? 'Save' : 'Add user')], { wide: false });
+    };
+
+    const fromEntra = () => {
+      const q = h('input', { type: 'search', placeholder: 'Search by name or e-mail' });
+      const role = { role: 'readonly', permissions: {} };
+      const list = h('div', { class: 'entra-list' }, h('p', { class: 'muted' }, 'Searching…'));
+      const roleBox = h('div');
+      const drawRole = () => put(roleBox, h('div', { class: 'label' }, 'Role for users you add'), roleSeg(role, drawRole), role.role === 'user' ? permissionChecks(role.permissions, labels) : null);
+      drawRole();
+      let timer;
+      const search = async () => {
+        try {
+          const found = await GET(`/api/sso/directory?q=${encodeURIComponent(q.value)}`);
+          put(list, found.length ? found.map((x) => h('div', { class: 'entra-row' },
+            h('div', { class: 'avatar' }, (x.name || '?').split(' ').map((w) => w[0]).slice(0, 2).join('')),
+            h('div', { style: { flex: 1, minWidth: 0 } }, h('b', null, x.name), h('div', { class: 'muted small' }, x.email, x.jobTitle ? ` · ${x.jobTitle}` : '')),
+            x.exists ? h('span', { class: 'badge ok' }, 'Added') : h('button', { class: 'small', onclick: async (ev) => {
+              try {
+                await POST('/api/users', { username: x.email, displayName: x.name, email: x.email, authMethod: 'sso', ssoOid: x.id, role: role.role, permissions: role.permissions });
+                ev.target.replaceWith(h('span', { class: 'badge ok' }, 'Added'));
+              } catch (err) { fail(err); }
+            } }, '+ Add'))) : h('p', { class: 'muted' }, 'Nobody found.'));
+        } catch (err) { put(list, h('div', { class: 'cam-result err' }, h('b', null, 'Could not search the directory'), h('span', null, err.message))); }
+      };
+      q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 300); });
+      modal('Add users from Microsoft Entra', h('div', { class: 'stack' }, h('p', { class: 'muted' }, 'They sign in with their Microsoft account; no password needed.'), roleBox, q, list),
+        (close) => [h('button', { class: 'primary', onclick: () => { close(); route(); } }, 'Done')]);
+      search();
+      q.focus();
+    };
+
+    main.append(h('div', { class: 'row between' }, h('h1', null, 'Users and roles'),
+      h('div', { class: 'row' },
+        h('a', { class: 'btn', href: '#sso' }, msLogo(), 'Configure SSO'),
+        ssoOn ? h('button', { onclick: fromEntra }, 'Add from Entra') : null,
+        h('button', { class: 'primary', onclick: () => edit(null) }, '+ Add user'))),
+      h('div', { class: 'role-cards' }, ['admin', 'user', 'readonly'].map((r) => h('div', { class: 'card role-card' },
+        h('div', { class: 'row between' }, h('b', null, ROLE_LABELS[r]), h('span', { class: 'badge' }, `${users.filter((u) => u.role === r).length} user${users.filter((u) => u.role === r).length === 1 ? '' : 's'}`)),
+        h('div', { class: 'hint' }, ROLE_HELP[r])))),
+      h('div', { class: 'card' }, h('table', { class: 'list users-table' },
+        h('thead', null, h('tr', null, h('th', null, 'User'), h('th', null, 'Role'), h('th', null, 'Can change'), h('th', null, 'Sign-in'), h('th', null, 'Two-step'), h('th', null, 'Last login'), h('th'))),
+        h('tbody', null, users.map((u) => h('tr', { class: u.disabled ? 'disabled' : '' },
+          h('td', null, h('b', null, u.displayName || u.username), u.id === me.user.id ? h('span', { class: 'badge', style: { marginLeft: '6px' } }, 'you') : null,
+            h('div', { class: 'muted small' }, [u.displayName ? u.username : null, u.email && u.email !== u.username ? u.email : null].filter(Boolean).join(' · '))),
+          h('td', null, h('span', { class: `badge role-${u.role}` }, ROLE_LABELS[u.role]), u.disabled ? h('span', { class: 'badge err', style: { marginLeft: '6px' } }, 'Disabled') : null),
+          h('td', { class: 'small' }, u.role === 'admin' ? 'Everything' : u.role === 'readonly' ? h('span', { class: 'muted' }, 'Nothing') : (Object.entries(u.permissions).filter(([, v]) => v).map(([k]) => k[0].toUpperCase() + k.slice(1)).join(', ') || h('span', { class: 'muted' }, 'Nothing'))),
+          h('td', null, u.authMethod === 'sso' ? h('span', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } }, msLogo(), 'Microsoft') : 'Password'),
+          h('td', null, u.authMethod === 'sso' ? h('span', { class: 'muted small' }, 'Via Microsoft') : u.mfaEnabled ? h('span', { class: 'badge ok' }, 'On') : u.mfaRequired ? h('span', { class: 'badge warn' }, 'Required, not set up') : h('span', { class: 'muted small' }, 'Off')),
+          h('td', { class: 'muted small' }, ago(u.lastLoginAt)),
+          h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
+            h('button', { class: 'small', onclick: () => edit(u) }, 'Edit'), ' ',
+            u.id === me.user.id ? null : h('button', { class: 'small ghost', onclick: async () => { if (await confirmBox(`Delete user "${u.username}"?`)) { await DEL(`/api/users/${u.id}`).catch(fail); route(); } } }, 'Delete'))))))));
+  }
+
+  const policyHint = () => {
+    const pol = me.passwordPolicy || { minLength: 8 };
+    return `At least ${pol.minLength} characters${pol.requireSpecial ? ', a special character' : ''}${pol.requireMixed ? ', upper and lower case and a number' : ''}.`;
+  };
+
+  // ---------- settings: users and roles → configure SSO ----------
+  async function pageSso(main) {
+    const cfg = await GET('/api/sso');
+    const labels = me.permissionLabels || {};
+    const data = { ...cfg, clientSecret: '', defaultPermissions: { ...cfg.defaultPermissions }, roleClaims: { ...cfg.roleClaims } };
+    const result = h('div');
+    const provBox = h('div');
+    const drawProv = () => put(provBox, h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: data.provisioning, onchange: (e) => { data.provisioning = e.target.checked; drawProv(); } }),
+      h('span', null, h('b', null, 'Create accounts automatically'), h('div', { class: 'hint' }, 'Someone from your organisation who signs in with Microsoft for the first time gets an account. Turn off to let in only users you added.'))),
+    data.provisioning ? h('div', { class: 'stack', style: { marginLeft: '26px' } }, h('div', { class: 'label' }, 'Role of new accounts'), roleSeg(data, drawProv),
+      (data.defaultRole === 'user') ? permissionChecks(data.defaultPermissions, labels) : null) : null);
+    Object.defineProperty(data, 'role', { get: () => data.defaultRole, set: (v) => { data.defaultRole = v; }, enumerable: false, configurable: true });
+    drawProv();
+    const copyBtn = h('button', { type: 'button', class: 'small', onclick: () => navigator.clipboard.writeText(cfg.redirectUri).then(() => toast('Copied', 'ok'), () => {}) }, icon('copy'), 'Copy');
+    const test = async (btn) => {
+      btn.disabled = true;
+      put(result, h('div', { class: 'cam-result' }, h('b', null, 'Testing…')));
+      const r = await POST('/api/sso/test', data).catch((err) => ({ ok: false, steps: [{ ok: false, text: err.message }] }));
+      put(result, h('div', { class: `cam-result ${r.ok ? 'ok' : 'err'}` }, h('b', null, r.ok ? 'Configuration works' : 'Configuration does not work yet'),
+        h('ul', { class: 'test-steps' }, r.steps.map((st) => h('li', { class: st.ok === true ? 'ok' : st.ok === false ? 'err' : 'warn' }, st.ok === true ? '✓ ' : st.ok === false ? '✕ ' : '! ', st.text)))));
+      btn.disabled = false;
+    };
+    const save = async () => {
+      try { await PUT('/api/sso', data); toast('SSO settings saved', 'ok'); route(); } catch (err) { fail(err); }
+    };
+    const testBtn = h('button', { onclick: () => test(testBtn) }, 'Test configuration');
+    main.append(h('div', { class: 'row between' }, h('div', null, h('a', { href: '#users', class: 'muted small' }, '← Users and roles'), h('h1', null, 'Configure SSO')),
+      h('div', { class: 'row' }, testBtn, h('button', { class: 'primary', onclick: save }, 'Save'))),
+      h('div', { class: 'grid two' },
+        h('div', { class: 'stack' },
+          h('div', { class: 'card stack' },
+            h('div', { class: 'row between' }, h('div', { class: 'row' }, msLogo(), h('h2', { style: { margin: 0 } }, 'Microsoft Entra ID')),
+              h('label', { class: 'row', style: { gap: '8px' } }, h('span', null, 'Sign-in on'), h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: data.enabled, onchange: (e) => { data.enabled = e.target.checked; } }), h('span')))),
+            h('div', { class: 'fields' },
+              field('Directory (tenant) ID', bind(data, 'tenantId', () => {}, 'text', { placeholder: '00000000-0000-0000-0000-000000000000' }), { wide: true }),
+              field('Application (client) ID', bind(data, 'clientId', () => {}, 'text', { placeholder: '00000000-0000-0000-0000-000000000000' }), { wide: true }),
+              field('Client secret', bind(data, 'clientSecret', () => {}, 'password', { placeholder: cfg.hasClientSecret ? '•••••••• (saved, leave empty to keep)' : 'The secret value, not its ID' }), { wide: true }),
+              field('Button text on the login page', bind(data, 'buttonLabel', () => {}), { wide: true })),
+            h('div', null, h('div', { class: 'label' }, 'Redirect URI'), h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, h('code', { class: 'redirect-uri' }, cfg.redirectUri), copyBtn),
+              h('div', { class: 'hint' }, 'Register this as a Web redirect URI in the app registration. It follows the server address under Settings → Application.')),
+            result),
+          h('div', { class: 'card stack' }, h('h2', null, 'Users'), provBox,
+            h('div', null, h('div', { class: 'label' }, 'Roles from Entra (optional)'),
+              h('div', { class: 'hint', style: { marginBottom: '8px' } }, 'Give app roles in the app registration and enter their values here; a user then gets that role at every sign-in. Leave empty to set roles in Beeldkrant.'),
+              h('div', { class: 'fields' }, ['admin', 'user', 'readonly'].map((r) => field(ROLE_LABELS[r], bind(data.roleClaims, r, () => {}, 'text', { placeholder: `e.g. Beeldkrant.${ROLE_LABELS[r].replace(' ', '')}` }))))))),
+        h('div', { class: 'card stack sso-steps' }, h('h2', null, 'Setting up in Microsoft Entra'),
+          h('ol', null,
+            h('li', null, 'Open the ', h('b', null, 'Microsoft Entra admin center'), ' → Identity → Applications → ', h('b', null, 'App registrations'), ' → New registration.'),
+            h('li', null, 'Name it, e.g. "Beeldkrant". Supported account types: ', h('i', null, 'Accounts in this organizational directory only'), '.'),
+            h('li', null, 'Redirect URI: platform ', h('b', null, 'Web'), ', with the address shown here.'),
+            h('li', null, 'Copy the ', h('b', null, 'Application (client) ID'), ' and ', h('b', null, 'Directory (tenant) ID'), ' from the Overview page.'),
+            h('li', null, 'Certificates & secrets → New client secret; copy its ', h('b', null, 'Value'), '.'),
+            h('li', null, 'To add users from Entra: API permissions → Add → Microsoft Graph → ', h('b', null, 'Application permissions'), ' → User.Read.All, then ', h('b', null, 'Grant admin consent'), '.'),
+            h('li', null, 'Optional: App roles → create roles (e.g. Beeldkrant.Admin) and assign them under Enterprise applications → Users and groups.'),
+            h('li', null, 'Enter the values here, ', h('b', null, 'Test configuration'), ', switch sign-in on and Save.')),
+          h('p', { class: 'hint' }, 'Two-step verification and password rules for these users are set in Entra (Conditional Access). Keep at least one admin with a password, so you can still log in if Microsoft sign-in stops working.'))));
+  }
+
+  // ---------- settings: security ----------
+  async function pageSecurity(main) {
+    const [sec, users] = await Promise.all([GET('/api/security'), GET('/api/users')]);
+    const pol = { ...sec.passwordPolicy };
+    const local = users.filter((u) => u.authMethod !== 'sso');
+    const ssoUsers = users.filter((u) => u.authMethod === 'sso');
+    const setRequired = async (u, on) => {
+      try { await PUT(`/api/users/${u.id}`, { mfaRequired: on }); u.mfaRequired = on; toast(`${u.displayName || u.username}: two-step verification ${on ? 'required' : 'no longer required'}`, 'ok'); } catch (err) { fail(err); route(); }
+    };
+    const mfaRows = local.map((u) => h('tr', null,
+      h('td', null, h('b', null, u.displayName || u.username), h('div', { class: 'muted small' }, ROLE_LABELS[u.role])),
+      h('td', null, u.mfaEnabled ? h('span', { class: 'badge ok' }, 'Set up') : h('span', { class: 'muted small' }, u.mfaRequired ? 'Sets it up at next login' : 'Not set up')),
+      h('td', null, h('label', { class: 'switch', title: 'Required' }, h('input', { type: 'checkbox', checked: u.mfaRequired, onchange: (e) => setRequired(u, e.target.checked) }), h('span'))),
+      h('td', { style: { textAlign: 'right' } }, u.mfaEnabled ? h('button', { class: 'small ghost', onclick: async () => { if (await confirmBox(`Reset two-step verification of ${u.username}? Their authenticator app stops working for Beeldkrant.`)) { await POST(`/api/users/${u.id}/mfa/reset`).catch(fail); route(); } } }, 'Reset') : null)));
+    main.append(h('h1', null, 'Security'),
+      h('div', { class: 'grid two' },
+        h('div', { class: 'card stack' }, h('h2', null, 'Two-step verification (MFA)'),
+          h('p', { class: 'muted' }, 'A user with MFA required needs a code from an authenticator app (such as Microsoft Authenticator) at every login. They set up the app at their next login and get recovery codes.'),
+          h('div', { class: 'row' },
+            h('button', { class: 'small', onclick: async () => { for (const u of local.filter((x) => !x.mfaRequired)) await PUT(`/api/users/${u.id}`, { mfaRequired: true }).catch(fail); route(); } }, 'Require for everyone'),
+            h('button', { class: 'small', onclick: async () => { for (const u of local.filter((x) => x.role === 'admin' && !x.mfaRequired)) await PUT(`/api/users/${u.id}`, { mfaRequired: true }).catch(fail); route(); } }, 'Require for admins')),
+          h('table', { class: 'list' }, h('thead', null, h('tr', null, h('th', null, 'User'), h('th', null, 'Status'), h('th', null, 'Required'), h('th'))), h('tbody', null, mfaRows)),
+          ssoUsers.length ? h('p', { class: 'hint' }, `${ssoUsers.length} user${ssoUsers.length === 1 ? '' : 's'} sign${ssoUsers.length === 1 ? 's' : ''} in with Microsoft; Entra ID handles their two-step verification.`) : null),
+        h('div', { class: 'card stack' }, h('h2', null, 'Password policy'),
+          h('div', { class: `notice ${sec.ssoEnabled ? 'strong' : ''}` }, msLogo(), h('span', null, h('b', null, 'Microsoft Entra SSO: '), 'users who sign in with Microsoft do not use this policy. Their password (and its rules and expiry) is managed in Microsoft Entra ID.')),
+          h('div', { class: 'fields' },
+            field('Minimum length', bind(pol, 'minLength', () => {}, 'number', { min: 6, max: 128 }), { hint: 'Characters, 6 or more' }),
+            field('Password expires after (days)', bind(pol, 'expiryDays', () => {}, 'number', { min: 0, max: 3650 }), { hint: '0 = never. An expired password must be changed at the next login.' }),
+            h('label', { class: 'check wide' }, bind(pol, 'requireSpecial', () => {}, 'checkbox'), 'Require a special character (such as ! ? # %)'),
+            h('label', { class: 'check wide' }, bind(pol, 'requireMixed', () => {}, 'checkbox'), 'Require upper case and lower case letters and a number')),
+          h('p', { class: 'hint' }, 'The policy applies when a password is set or changed; existing passwords keep working until they expire.'),
+          h('div', null, h('button', { class: 'primary', onclick: async () => {
+            try { const r = await PUT('/api/security', { passwordPolicy: pol }); me.passwordPolicy = r.passwordPolicy; toast('Password policy saved', 'ok'); } catch (err) { fail(err); }
+          } }, 'Save policy')))));
   }
 
   // ---------- system: info ----------
