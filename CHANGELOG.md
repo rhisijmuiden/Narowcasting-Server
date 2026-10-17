@@ -1,6 +1,18 @@
 # Changelog
 
-All notable changes to Beeldkrant. The admin panel shows this file under System → Info.
+All notable changes to Beeldkrant. The admin panel shows this file under the Info button.
+
+## 0.4.0 (2026-10-17)
+
+### Added
+- Several outputs at the same time: RTMP/RTMPS/SRT servers, YouTube and Facebook, each with its own switch, state, bitrate, log and reconnect. The stream is encoded once per playout and copied to every output.
+- YouTube and Facebook accounts connected with a code (google.com/device, facebook.com/device): Beeldkrant creates the live broadcast or live video when an output starts and ends it when it stops. Stream keys still work as an alternative.
+- Outputs → Routing: choose per output whether it sends the schedule or a fixed playout, in a matrix of playouts and outputs, with an overview of the playouts on air. Each playout on air runs its own renderer and encoder.
+- Clone a playout with all its scenes, overlays, ad blocks and music, from the playouts list or the editor, for example to make a clean feed.
+- Screenshots of every part of the panel in the README.
+
+### Changed
+- An existing stream destination becomes the output "Main stream" after the update.
 
 ## 0.3.0 (2026-10-17)
 

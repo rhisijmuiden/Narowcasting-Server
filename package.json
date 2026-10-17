@@ -1,6 +1,6 @@
 {
   "name": "beeldkrant",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Narrowcasting picture-newspaper generator that renders layouts and pushes them as an RTMP stream",
   "main": "server/index.js",
   "type": "commonjs",

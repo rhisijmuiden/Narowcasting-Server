@@ -1,10 +1,14 @@
 # Beeldkrant
 
-A narrowcasting "beeldkrant" (picture newspaper) generator. You build playouts of scenes in a web admin panel, Beeldkrant renders them and pushes the result as an **RTMP or SRT stream** to a stream server of your choice. It is not a streaming server itself: it only produces and sends the stream.
+A narrowcasting "beeldkrant" (picture newspaper) generator. You build playouts of scenes in a web admin panel, Beeldkrant renders them and pushes the result as **RTMP(S) or SRT streams** to stream servers, YouTube and Facebook, several at the same time. It is not a streaming server itself: it only produces and sends the streams.
+
+![Dashboard with the stream on air, the live preview and the renderer log](docs/screenshots/dashboard.png)
 
 - Admin panel on port **8080**
 - Runs in a **Debian 13 LXC container** on Proxmox VE, installed with one command from the Proxmox shell
 - Everything (code, UI, docs) in English
+
+Contents: [Install](#install-on-proxmox-ve) · [Dashboard](#dashboard-and-statistics) · [Playouts](#playouts-and-scenes) · [Media](#media) · [Schedule](#schedule) · [Outputs](#outputs) · [Routing](#routing) · [Settings](#settings-and-your-account) · [Backups](#backups) · [Updating](#updating)
 
 ## Install on Proxmox VE
 
@@ -38,6 +42,13 @@ It fetches the latest version, installs it and restarts Beeldkrant, or tells you
 
 The admin panel checks for a new version once a day. Admins then see a notice with an **Update now** button, which runs the same update; The **Info** button at the bottom left of the menu shows the version, build and changelog (and what a new version brings), with *Check now* and the update button. Before updating, the panel offers to make a local backup of the application and database, optionally with the media; the update only starts when that backup succeeded. The panel starts the update through the `beeldkrant-update.path` and `beeldkrant-update.service` systemd units, so the web server itself never needs root. Your playouts, media and settings in `/var/lib/beeldkrant` are kept. `update --force` reinstalls the current version. To follow another branch, put `BEELDKRANT_REF=<branch>` in `/etc/default/beeldkrant`.
 
+Before an update the panel asks whether to make a local backup first:
+
+<p>
+  <img src="docs/screenshots/info.png" alt="Info page with the version, build and changelog" width="49%">
+  <img src="docs/screenshots/update-dialog.png" alt="Update dialog with the backup options" width="49%">
+</p>
+
 Useful overrides: `mode=default` skips the wizard, `var_gpu=no` turns GPU passthrough off, `BEELDKRANT_REF=<branch>` installs another branch.
 
 ## How it works
@@ -45,16 +56,21 @@ Useful overrides: `mode=default` skips the wizard, `var_gpu=no` turns GPU passth
 ```
  Admin panel (:8080) ──► data.json + media
                               │
-                              ▼
+                              ▼              one pipeline per playout on air
  Xvfb virtual display ◄── Chromium (kiosk) showing /player
  PulseAudio null sink ◄── audio from videos and background music
           │
           ▼
- ffmpeg (x11grab + pulse) ──► H.264/AAC ──► rtmp(s)://…  (FLV)
-                                       └──► srt://…      (MPEG-TS)
+ ffmpeg (x11grab + pulse) ──► H.264/AAC ──► MPEG-TS over local UDP
+                                                   │  fan-out
+                         ┌─────────────────────────┼─────────────────────────┐
+                         ▼                         ▼                         ▼
+                 relay ──► rtmp(s)://…     relay ──► YouTube          relay ──► srt://…
 ```
 
-The player page draws each scene with HTML/CSS at the exact pixel size of the playout. Chromium renders it on a virtual display, ffmpeg captures the screen and the audio sink and encodes the stream. If the destination drops, only the encoder reconnects; if the browser or display dies, the whole pipeline restarts with back-off. When the schedule switches to a playout with a different resolution, the pipeline is rebuilt at the new size (or scaled to a fixed output size if you choose that).
+The player page draws each scene with HTML/CSS at the exact pixel size of the playout. Chromium renders it on a virtual display, ffmpeg captures the screen and the audio sink and encodes the stream once. A small fan-out in the server hands that stream to one relay per output, which copies it without re-encoding to its destination (RTMP/RTMPS as FLV, SRT as MPEG-TS). Each output connects, drops and reconnects on its own. If the browser or display dies, that pipeline restarts with back-off. When the schedule switches to a playout with a different resolution, the pipeline is rebuilt at the new size (or scaled to a fixed output size if you choose that).
+
+The schedule has one pipeline. Every playout that an output is routed to directly (see [Routing](#routing)) gets a pipeline of its own, with its own display, audio sink and encoder.
 
 ## Concepts
 
@@ -71,6 +87,32 @@ The player page draws each scene with HTML/CSS at the exact pixel size of the pl
 
 Transitions: fade, crossfade, cut, slide (left/right/up/down), zoom, wipe, circle and blur, per playout with an override per scene.
 
+## Dashboard and statistics
+
+The dashboard shows what is on air: the playout, any playouts routed to their own outputs, the resolution, fps, bitrate and the state of every output, with a live preview and the renderer log. Start, stop and restart the stream here. *Dashboard → Statistics* shows the load, CPU, memory, the outgoing stream and network traffic in Mbit/s and the free disk space, with charts of the last 15 minutes. Hover a chart to read a value.
+
+<p>
+  <img src="docs/screenshots/statistics.png" alt="Statistics with load, stream bitrate, network and disk" width="49%">
+  <img src="docs/screenshots/dashboard-light.png" alt="The dashboard in the light theme" width="49%">
+</p>
+
+## Playouts and scenes
+
+*Playouts* lists your channels with their resolution, number of scenes, whether the schedule has them on air and how many outputs they are routed to. The editor has a scene list on the left, the canvas in the middle and the properties of the selected scene or element on the right. *Overlays* holds what stays on top of every scene; *Playout settings* holds the transition, background music and ad blocks.
+
+<p>
+  <img src="docs/screenshots/playouts.png" alt="Playouts list with Preview, Clone and Delete" width="49%">
+  <img src="docs/screenshots/playout-editor.png" alt="Scene editor with scenes, canvas and properties" width="49%">
+</p>
+<p>
+  <img src="docs/screenshots/playout-overlays.png" alt="Overlays: a ticker and a clock on top of every scene" width="49%">
+  <img src="docs/screenshots/playout-settings.png" alt="Playout settings with background music and ad blocks" width="49%">
+</p>
+
+**Clone** (in the list and in the editor) makes a full copy of a playout: every scene, overlay, ad block and the music. Use it for a variant, such as a clean feed without overlays or ads, and route that copy to its own output.
+
+![Clone dialog: name the copy](docs/screenshots/playout-clone.png)
+
 ## Media
 
 | Type | Formats |
@@ -83,20 +125,85 @@ Transitions: fade, crossfade, cut, slide (left/right/up/down), zoom, wipe, circl
 
 *Media management* opens with an overview of everything you have: files and folders, video, audio, ads, RSS feeds and input streams. Keep media tidy in **folders**: create folders (and subfolders) under *Media folders*, upload straight into the folder you have open, and move files by dragging them onto a folder or a breadcrumb, or with *Move*. Deleting a folder keeps its files: they move up one level. The media pickers in the scene editor browse the same folders and can search all of them. *Video*, *Audio* and *Ads* list those files across all folders. Mark a file as an ad (commercial) with its *Ad* button, or upload under *Ads* to mark new files straight away.
 
-## Stream output
+<p>
+  <img src="docs/screenshots/media-overview.png" alt="Media management overview" width="49%">
+  <img src="docs/screenshots/media-folders.png" alt="Media folders with upload and folders" width="49%">
+</p>
+<p>
+  <img src="docs/screenshots/media-video.png" alt="Video across all folders" width="49%">
+  <img src="docs/screenshots/media-ads.png" alt="Ads: files marked as commercials" width="49%">
+</p>
 
-Under *Stream output* you set:
+*RSS feeds* lists the feeds that RSS scenes use, with a preview of their items. *Input streams* lists the Icecast/Shoutcast streams, lets you listen to them and shows which playouts use them as background music.
 
-- destination: `rtmp://`, `rtmps://` or `srt://` (for example `rtmp://stream.example.com/live/<key>` or `srt://host:9000?streamid=…`)
-- resolution: follow the playout on air, or a fixed output size
-- frame rate, video and audio bitrate
-- encoder: CPU (x264), Intel/AMD GPU (VAAPI) or NVIDIA GPU (NVENC)
+<p>
+  <img src="docs/screenshots/rss-feeds.png" alt="RSS feeds" width="49%">
+  <img src="docs/screenshots/input-streams.png" alt="Icecast/Shoutcast input streams" width="49%">
+</p>
 
-Start, stop and watch the stream (state, fps, bitrate and renderer log) on the dashboard. *Dashboard → Statistics* shows the load, CPU, memory, the outgoing stream and network traffic in Mbit/s and the free disk space, with charts of the last 15 minutes.
+## Schedule
 
-## Look and feel
+A weekly calendar. Drag in a day to put a playout on air at that time; click a block to change its playout, times, days, dates or priority. Weekly blocks repeat every week; one-off blocks on a date with a higher priority override them. Outside the blocks the playout chosen at the top runs.
+
+<p>
+  <img src="docs/screenshots/schedule.png" alt="Weekly schedule with blocks" width="49%">
+  <img src="docs/screenshots/schedule-block.png" alt="Editing a schedule block" width="49%">
+</p>
+
+## Outputs
+
+Under *Outputs* you add every destination the stream goes to. They all send at the same time; each has its own switch, state (live, connecting, reconnecting, error), bitrate, log and, for YouTube and Facebook, a *Watch* link to the broadcast.
+
+<p>
+  <img src="docs/screenshots/outputs.png" alt="Outputs with five destinations, four of them live" width="49%">
+  <img src="docs/screenshots/output-add.png" alt="Adding an output" width="49%">
+</p>
+
+Output types:
+
+- **RTMP / RTMPS / SRT**: any server, for example `rtmp://stream.example.com/live/<key>` or `srt://host:9000?streamid=…`.
+- **YouTube** and **Facebook**, in one of two ways:
+  - **Connected account**: Beeldkrant creates the live broadcast (YouTube) or live video (Facebook) itself each time the output starts, with your title, description and privacy, and ends it when the output stops. On Facebook you choose your profile or a page you manage.
+  - **Stream key**: paste the key from YouTube Studio or Facebook Live Producer; it is sent to `rtmps://a.rtmps.youtube.com/live2` or `rtmps://live-api-s.facebook.com:443/rtmp`.
+
+<p>
+  <img src="docs/screenshots/output-youtube.png" alt="YouTube output with a connected account" width="49%">
+  <img src="docs/screenshots/output-facebook.png" alt="Facebook output going live on a page" width="49%">
+</p>
+
+**Connecting an account** works with a code, so the server needs no public address: click *Connect YouTube* or *Connect Facebook*, open the address shown on any device, enter the code and allow access. Tokens stay on the server.
+
+This needs your own API credentials once, under *Linking settings…* (admins only):
+
+- **YouTube**: in Google Cloud Console enable the *YouTube Data API v3*, create an OAuth client ID of type **TVs and Limited Input devices** and enter its client ID and secret. While the Google app is in testing, add your Google account as a test user. The channel must have live streaming enabled.
+- **Facebook**: create an app at Meta for Developers, add Facebook Login, switch on **Login from Devices** and enter the App ID and Client token. Until Meta has reviewed the app, only people with a role on the app can go live through it. Facebook only allows going live from profiles and pages that meet its own requirements.
+
+<p>
+  <img src="docs/screenshots/connect-youtube.png" alt="Connecting YouTube with a code" width="49%">
+  <img src="docs/screenshots/linking-settings.png" alt="Linking settings with the setup steps" width="49%">
+</p>
+
+The **Encoding** card sets the resolution (follow the playout, or a fixed size), frame rate, video and audio bitrate and the encoder: CPU (x264), Intel/AMD GPU (VAAPI) or NVIDIA GPU (NVENC). Each playout on air is encoded once and sent unchanged to all outputs routed to it.
+
+## Routing
+
+*Outputs → Routing* decides which playout goes to which output. Every output sends one source: **Schedule** (whatever the schedule has on air) or one fixed playout. The matrix has a row per playout and a column per output; click a circle to route that output. *On air now* shows the playouts that are running, their resolution and bitrate and the outputs they feed.
+
+A typical setup sends the schedule to YouTube, Facebook and your own server, and a cloned playout without overlays (a clean feed) to another server. Outputs on the same playout share one encoder; each extra playout on air adds its own renderer and encoder, so roughly the load of one more stream. Changes apply right away while the stream runs: a playout starts when the first output is routed to it and stops when the last one leaves. Deleting a playout moves its outputs back to the schedule.
+
+<p>
+  <img src="docs/screenshots/routing.png" alt="Routing matrix with two playouts on air" width="49%">
+  <img src="docs/screenshots/routing-light.png" alt="Routing in the light theme" width="49%">
+</p>
+
+## Settings and your account
 
 Under *Settings → Application* you rename the panel (shown in the menu, on the login page and in the browser tab) and, as an admin, set the server address and the web port. A new port takes effect right away and the panel moves you there; it is stored in the database and wins over the `PORT` the service starts with. Each user picks a light or dark theme, or *Auto* to follow the device, with the switch at the bottom of the menu; your name at the bottom opens your account (theme and password).
+
+<p>
+  <img src="docs/screenshots/settings-application.png" alt="Settings: application name, server address, port and region" width="49%">
+  <img src="docs/screenshots/account.png" alt="Your account: theme and password" width="49%">
+</p>
 
 ## Backups
 
@@ -109,7 +216,15 @@ Under *Settings → Backups* (admins only):
 
 Backups are named `beeldkrant_<date>_<time>_<parts>.tar.gz` and kept in `/var/lib/beeldkrant/backups`; backups there can also be downloaded from the panel. Each archive holds a `manifest.json` and `app/`, `database/data.json` and/or `media/`.
 
+![Backups: what to back up, schedule and external location](docs/screenshots/backups.png)
+<p>
+  <img src="docs/screenshots/backups-restore.png" alt="Backups on this server and on the external location" width="49%">
+  <img src="docs/screenshots/backups-restore-dialog.png" alt="Restoring a backup, choosing the parts" width="49%">
+</p>
+
 ## Users
+
+<img src="docs/screenshots/login.png" alt="Login page" width="49%">
 
 On first start Beeldkrant creates the user `admin` with a random one-time password (shown by the installer and kept in `DATA_DIR/initial-admin-password` until it is changed). Accounts carry a role (`admin`, `editor`, `viewer`); a user management screen for creating more accounts is planned.
 
@@ -130,7 +245,8 @@ Environment variables:
 | `DATA_DIR` | `./data` | Database (`data.json`) and uploaded media |
 | `CHROMIUM_PATH` | auto | Browser used for rendering |
 | `FFMPEG_PATH` | auto | ffmpeg binary |
-| `BK_DISPLAY` | `:99` | Virtual X display |
+| `BK_DISPLAY` | `:99` | First virtual X display; each extra playout on air uses the next number |
+| `BK_FANOUT_PORT` | `29000` | First local UDP port for the stream fan-out (uses this port and up) |
 | `VAAPI_DEVICE` | `/dev/dri/renderD128` | GPU device for VAAPI |
 | `MAX_UPLOAD_MB` | `2048` | Upload size limit |
 | `BK_INITIAL_PASSWORD` | random | One-time admin password on first start |
@@ -141,7 +257,8 @@ Environment variables:
 ct/beeldkrant.sh               Proxmox host script (creates the LXC)
 install/beeldkrant-install.sh  Runs inside the container
 scripts/update.sh              The `update` command inside the container
-server/                        Node.js server: API, auth, schedule, feeds, stream pipeline
+server/                        Node.js server: API, auth, schedule, feeds, stream pipelines, outputs
+docs/screenshots/              Screenshots used in this README
 public/admin/                  Admin panel (plain JS, no build step)
 public/player/                 Player page and the shared scene renderer
 ```
