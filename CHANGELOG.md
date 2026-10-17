@@ -2,6 +2,19 @@
 
 All notable changes to Beeldkrant. The admin panel shows this file under the Info button.
 
+## 0.5.0 (2026-10-17)
+
+### Added
+- Photo carousel element: several photos in one place, one after another, with a time per photo, a transition (fade, slide, zoom or cut) and a fixed or random order. Add photos from the media folders and change the order by dragging or with the arrows.
+- Video carousel element: several videos back to back, in a fixed or random order, with or without sound.
+- RSS feed element: a whole feed on a scene with photos, titles, text and dates, as a list, a grid or one item at a time, page by page.
+- Number of items per RSS feed (default 10), used by RSS elements, RSS scenes and tickers; the feed test shows the items with their photos.
+- Upload panel under Media management: upload many files at once and follow each one with its progress, speed and time left, cancel or retry it, and keep working in the panel meanwhile.
+
+### Changed
+- The scene editor has a new look: a clear top bar with Scenes, Overlays and Playout settings, buttons with icons, scene thumbnails, a layer list with show/hide and lock, and an "Unsaved changes" marker.
+- "Move on: when the media has played" also waits for a full round of a carousel and all pages of an RSS element.
+
 ## 0.4.0 (2026-10-17)
 
 ### Added

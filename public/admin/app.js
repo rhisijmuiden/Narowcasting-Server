@@ -53,6 +53,123 @@
   }
   const fail = (err) => toast(err.message || String(err), 'err');
 
+  // ---------- uploads ----------
+  // One upload per file, a few at a time, listed in a panel that stays open while you move around
+  // the admin panel: progress, speed and time left per file, with cancel and retry.
+  const UPLOAD_PARALLEL = 3;
+  const UPLOAD_TYPES = /\.(jpe?g|png|gif|webp|svg|bmp|mp4|m4v|webm|mov|mkv|mp3|m4a|aac|ogg|oga|opus|wav|flac)$/i;
+  const uploads = { items: [], panel: null, list: null, title: null, collapsed: false, listeners: new Set() };
+  const fmtLeft = (s) => (!isFinite(s) ? '' : s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min left` : s >= 60 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s left` : `${Math.max(1, Math.round(s))} s left`);
+
+  function queueUploads(files, query, folderName) {
+    for (const file of files) {
+      const ok = UPLOAD_TYPES.test(file.name) || /^(image|video|audio)\//.test(file.type);
+      uploads.items.push({ id: uid(), file, query: String(query), folderName, state: ok ? 'queued' : 'failed', loaded: 0, speed: 0, error: ok ? null : 'Not a supported file type' });
+    }
+    uploads.collapsed = false;
+    pumpUploads();
+  }
+  function pumpUploads() {
+    while (uploads.items.filter((u) => u.state === 'uploading' || u.state === 'processing').length < UPLOAD_PARALLEL) {
+      const next = uploads.items.find((u) => u.state === 'queued');
+      if (!next) break;
+      sendUpload(next);
+    }
+    drawUploads();
+  }
+  function sendUpload(u) {
+    const fd = new FormData();
+    fd.append('files', u.file);
+    const xhr = new XMLHttpRequest();
+    u.xhr = xhr;
+    u.state = 'uploading';
+    u.loaded = 0;
+    u.error = null;
+    u.started = performance.now();
+    u.samples = [[u.started, 0]];
+    xhr.open('POST', `/api/media?${u.query}`);
+    xhr.upload.onprogress = (e) => {
+      const now = performance.now();
+      u.loaded = e.loaded;
+      u.samples.push([now, e.loaded]);
+      while (u.samples.length > 2 && now - u.samples[0][0] > 3000) u.samples.shift(); // speed over the last few seconds
+      const [t0, b0] = u.samples[0];
+      if (now > t0) u.speed = ((e.loaded - b0) / (now - t0)) * 1000;
+      drawUploads();
+    };
+    xhr.upload.onload = () => { u.loaded = u.file.size; u.state = 'processing'; drawUploads(); };
+    xhr.onload = () => {
+      u.xhr = null;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        u.state = 'done';
+        u.took = (performance.now() - u.started) / 1000;
+        uploads.listeners.forEach((fn) => fn());
+      } else {
+        u.state = 'failed';
+        u.error = 'Upload failed';
+        try { u.error = JSON.parse(xhr.responseText).error || u.error; } catch { /* keep */ }
+        if (xhr.status === 413) u.error = 'File too large';
+      }
+      pumpUploads();
+    };
+    xhr.onerror = () => { u.xhr = null; u.state = 'failed'; u.error = 'Connection lost'; pumpUploads(); };
+    xhr.onabort = () => { u.xhr = null; u.state = 'cancelled'; pumpUploads(); };
+    xhr.send(fd);
+  }
+  function cancelUpload(u) {
+    if (u.xhr) u.xhr.abort(); else if (u.state === 'queued') { u.state = 'cancelled'; pumpUploads(); }
+  }
+  function drawUploads() {
+    if (!uploads.items.length) { if (uploads.panel) { uploads.panel.remove(); uploads.panel = null; } return; }
+    if (!uploads.panel) {
+      uploads.title = h('div', { class: 'upload-title' });
+      uploads.total = h('div', { class: 'progress' }, h('div'));
+      uploads.list = h('div', { class: 'upload-list' });
+      uploads.toggle = h('button', { class: 'icon-btn', title: 'Collapse', onclick: () => { uploads.collapsed = !uploads.collapsed; drawUploads(); } });
+      uploads.panel = h('div', { class: 'upload-panel' },
+        h('div', { class: 'upload-head' }, uploads.title,
+          h('button', { class: 'small ghost', onclick: () => { uploads.items = uploads.items.filter((u) => !['done', 'failed', 'cancelled'].includes(u.state)); drawUploads(); } }, 'Clear finished'),
+          uploads.toggle),
+        uploads.total, uploads.list);
+      document.body.appendChild(uploads.panel);
+    }
+    const items = uploads.items;
+    const active = items.filter((u) => ['queued', 'uploading', 'processing'].includes(u.state));
+    const done = items.filter((u) => u.state === 'done').length;
+    const failed = items.filter((u) => u.state === 'failed').length;
+    const totalSize = active.reduce((s, u) => s + u.file.size, 0);
+    const totalLoaded = active.reduce((s, u) => s + u.loaded, 0);
+    const speed = items.filter((u) => u.state === 'uploading').reduce((s, u) => s + u.speed, 0);
+    put(uploads.title, h('b', null, active.length ? `Uploading ${active.length} of ${items.length} file${items.length === 1 ? '' : 's'}` : 'Uploads finished'),
+      h('small', null, active.length
+        ? [`${fmtBytes(totalLoaded)} of ${fmtBytes(totalSize)}`, speed ? `${fmtBytes(speed)}/s` : '', speed ? fmtLeft((totalSize - totalLoaded) / speed) : ''].filter(Boolean).join(' · ')
+        : `${done} uploaded${failed ? ` · ${failed} failed` : ''}`));
+    uploads.total.style.display = active.length ? '' : 'none';
+    uploads.total.firstChild.style.width = `${totalSize ? (totalLoaded / totalSize) * 100 : 100}%`;
+    uploads.panel.classList.toggle('collapsed', uploads.collapsed);
+    put(uploads.toggle, icon(uploads.collapsed ? 'up' : 'down'));
+    put(uploads.list, ...items.map((u) => {
+      const pct = u.file.size ? Math.min(100, (u.loaded / u.file.size) * 100) : 100;
+      let status;
+      if (u.state === 'queued') status = `Waiting · ${fmtBytes(u.file.size)}`;
+      else if (u.state === 'uploading') status = `${fmtBytes(u.loaded)} of ${fmtBytes(u.file.size)} · ${u.speed ? `${fmtBytes(u.speed)}/s · ${fmtLeft((u.file.size - u.loaded) / u.speed)}` : 'starting…'}`;
+      else if (u.state === 'processing') status = 'Processing on the server…';
+      else if (u.state === 'done') status = `Done · ${fmtBytes(u.file.size)} in ${u.took < 1 ? '<1' : Math.round(u.took)} s · ${u.folderName}`;
+      else if (u.state === 'failed') status = u.error;
+      else status = 'Cancelled';
+      return h('div', { class: `upload-item ${u.state}` },
+        h('div', { class: 'row between' },
+          h('span', { class: 'upload-name', title: u.file.name }, u.file.name),
+          h('span', { class: 'upload-pct' }, u.state === 'uploading' ? `${Math.floor(pct)}%` : '')),
+        h('div', { class: 'progress' }, h('div', { style: { width: `${['done', 'processing'].includes(u.state) ? 100 : pct}%` } })),
+        h('div', { class: 'row between' },
+          h('small', { class: 'upload-status' }, status),
+          u.state === 'failed' || u.state === 'cancelled' ? h('button', { class: 'small ghost', onclick: () => { u.state = 'queued'; pumpUploads(); } }, 'Retry')
+            : ['queued', 'uploading'].includes(u.state) ? h('button', { class: 'small ghost', onclick: () => cancelUpload(u) }, 'Cancel') : null));
+    }));
+  }
+  window.addEventListener('beforeunload', (e) => { if (uploads.items.some((u) => ['queued', 'uploading', 'processing'].includes(u.state))) e.preventDefault(); });
+
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const uid = () => Math.random().toString(16).slice(2, 10);
   const thumb = (m) => h('div', { class: 'thumb', style: m.thumbUrl ? { backgroundImage: `url("${m.thumbUrl}")` } : {} },
@@ -470,16 +587,64 @@
   }
 
   // ---------- playout editor ----------
+  // Line icons (24x24, drawn with currentColor) for the editor.
+  const ICONS = {
+    text: 'M4 7V5h16v2M9 19h6M12 5v14',
+    image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
+    video: '<rect x="2" y="6" width="14" height="12" rx="2"/><path d="m22 8-6 4 6 4V8z"/>',
+    slideshow: '<rect x="7" y="3" width="14" height="14" rx="2"/><path d="M3 7v12a2 2 0 0 0 2 2h12"/><path d="m21 13-4-4-7 7"/>',
+    playlist: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 4v16M17 4v16M2 9h5M2 15h5M17 9h5M17 15h5"/>',
+    rss: '<path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>',
+    ticker: '<rect x="2" y="8" width="20" height="8" rx="2"/><path d="M6 12h8M17 12h1"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    weather: '<path d="M12 3v2M5.6 5.6l1.4 1.4M3 12h2M18.4 5.6 17 7"/><path d="M8.5 11a3.5 3.5 0 0 1 6.8-1"/><path d="M17 20H8a3.5 3.5 0 1 1 .9-6.9A5 5 0 0 1 18 14a3 3 0 0 1-1 6z"/>',
+    webpage: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+    box: '<rect x="4" y="4" width="16" height="16" rx="3"/>',
+    plus: 'M12 5v14M5 12h14',
+    trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>',
+    copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+    eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    eyeOff: '<path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6 0 10 7 10 7a17 17 0 0 1-3.2 3.9M6.6 6.6A17 17 0 0 0 2 12s4 7 10 7a9.7 9.7 0 0 0 4.4-1"/>',
+    lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    unlock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>',
+    up: 'm18 15-6-6-6 6',
+    down: 'm6 9 6 6 6-6',
+    back: 'M19 12H5M12 19l-7-7 7-7',
+    play: '<path d="M7 4v16l13-8z"/>',
+    save: '<path d="M5 3h11l3 3v15H5z"/><path d="M8 3v5h8M8 21v-7h8v7"/>',
+    scenes: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10"/>',
+    layers: '<path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/>',
+    settings: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+    grip: '<circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/>',
+    shuffle: '<path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>',
+    list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+    close: 'M18 6 6 18M6 6l12 12',
+    maximize: '<path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/>',
+    center: '<circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>',
+  };
+  function icon(name) {
+    const p = ICONS[name] || '';
+    const span = document.createElement('span');
+    span.className = 'ic';
+    span.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p.startsWith('<') ? p : `<path d="${p}"/>`}</svg>`;
+    return span;
+  }
+
   const ELEMENT_TYPES = {
     text: { label: 'Text', w: 800, h: 160, defaults: { text: 'New text', fontSize: 64, fontWeight: 700, color: '#ffffff', align: 'left', valign: 'middle' } },
     image: { label: 'Image', w: 640, h: 360, defaults: { fit: 'cover' } },
     video: { label: 'Video', w: 960, h: 540, defaults: { fit: 'cover', audio: true } },
+    slideshow: { label: 'Photo carousel', w: 960, h: 540, defaults: { items: [], order: 'fixed', interval: 5, transition: 'fade', transitionMs: 800, fit: 'cover' } },
+    playlist: { label: 'Video carousel', w: 960, h: 540, defaults: { items: [], order: 'fixed', fit: 'cover', audio: true } },
+    rss: { label: 'RSS feed', w: 1600, h: 860, defaults: { feedId: null, layout: 'list', perPage: 4, columns: 3, interval: 8, fontSize: 40, color: '#ffffff', cardBackground: 'rgba(0,0,0,0.45)', gap: 20, showImage: true, showDescription: true } },
     ticker: { label: 'Ticker', w: 1920, h: 80, defaults: { source: 'text', text: 'Breaking news\nMore headlines here', fontSize: 40, speed: 150, background: '#c8102e', color: '#ffffff', label: 'News' } },
     clock: { label: 'Clock', w: 300, h: 110, defaults: { mode: 'time', fontSize: 72, color: '#ffffff' } },
     weather: { label: 'Weather', w: 520, h: 360, defaults: { lat: 52.37, lon: 4.9, label: 'Amsterdam', fontSize: 56, color: '#ffffff' } },
     webpage: { label: 'Web page', w: 1280, h: 720, defaults: { url: 'https://', zoom: 100 } },
     box: { label: 'Box', w: 600, h: 300, defaults: { background: 'rgba(0,0,0,0.5)', radius: 16 } },
   };
+  // How the "Add" toolbar of the editor groups the element types.
+  const TOOL_GROUPS = [['Text and info', ['text', 'ticker', 'clock', 'weather', 'rss']], ['Media', ['image', 'video', 'slideshow', 'playlist']], ['Other', ['box', 'webpage']]];
   const TRANSITIONS = ['fade', 'crossfade', 'cut', 'slide-left', 'slide-right', 'slide-up', 'slide-down', 'zoom', 'wipe', 'wipe-down', 'circle', 'blur'];
   const DAY_LABELS = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
 
@@ -512,8 +677,10 @@
     const feedOptions = [['', '— choose a feed —'], ...feeds.map((f) => [f.id, f.name])];
 
     const S = { slideIndex: playout.slides.length ? 0 : -1, mode: 'slide', selected: null };
-    const saveBtn = h('button', { class: 'primary', onclick: save }, 'Save');
-    const markDirty = () => { editorDirty = true; saveBtn.textContent = 'Save *'; };
+    const saveBtn = h('button', { class: 'primary', title: 'Save (Ctrl+S)', onclick: save }, icon('save'), 'Save');
+    const unsaved = h('span', { class: 'unsaved', style: { display: 'none' } }, 'Unsaved changes');
+    const setDirty = (on) => { editorDirty = on; unsaved.style.display = on ? '' : 'none'; };
+    const markDirty = () => setDirty(true);
 
     const sideEl = h('div', { class: 'side' });
     const propsEl = h('div', { class: 'props' });
@@ -521,23 +688,27 @@
     const stage = h('div', { class: 'canvas-stage' });
     area.appendChild(stage);
     const toolbar = h('div', { class: 'toolbar' },
-      Object.entries(ELEMENT_TYPES).map(([type, def]) => h('button', { class: 'small', onclick: () => addElement(type) }, `+ ${def.label}`)));
+      TOOL_GROUPS.map(([group, types]) => h('div', { class: 'tool-group' },
+        h('span', { class: 'tool-group-label' }, group),
+        h('div', { class: 'tool-row' }, types.map((type) => h('button', { class: 'tool-tile', title: `Add ${ELEMENT_TYPES[type].label.toLowerCase()}`, onclick: () => addElement(type) },
+          icon(type), h('span', null, ELEMENT_TYPES[type].label)))))));
+    const tab = (id, mode, ic, label) => h('button', { id, onclick: () => { S.mode = mode; S.selected = null; renderAll(); } }, icon(ic), label);
 
     put(app, h('div', { class: 'editor' },
       h('div', { class: 'topbar' },
-        h('a', { href: '#playouts', class: 'btn' }, '← Playouts'),
-        h('span', { class: 'title' }, playout.name),
-        h('span', { class: 'muted' }, `${playout.width} x ${playout.height}`),
+        h('a', { href: '#playouts', class: 'btn ghost', title: 'Back to the playouts' }, icon('back'), 'Playouts'),
+        h('div', { class: 'ed-title' }, h('span', { class: 'title' }, playout.name), h('span', { class: 'chip' }, `${playout.width} × ${playout.height}`)),
+        h('div', { class: 'seg' },
+          tab('tab-slide', 'slide', 'scenes', 'Scenes'),
+          tab('tab-overlay', 'overlay', 'layers', 'Overlays'),
+          tab('tab-settings', 'settings', 'settings', 'Playout settings')),
         h('div', { class: 'grow' }),
-        h('div', { class: 'tabs', style: { margin: 0 } },
-          h('button', { id: 'tab-slide', onclick: () => { S.mode = 'slide'; S.selected = null; renderAll(); } }, 'Scenes'),
-          h('button', { id: 'tab-overlay', onclick: () => { S.mode = 'overlay'; S.selected = null; renderAll(); } }, 'Overlays')),
-        h('button', { onclick: () => { S.selected = null; S.mode = 'settings'; renderAll(); } }, 'Playout settings'),
-        h('a', { class: 'btn', href: `/player/?playout=${playout.id}`, target: '_blank' }, 'Preview ▶'),
+        unsaved,
+        h('a', { class: 'btn', href: `/player/?playout=${playout.id}`, target: '_blank', title: 'Open the playout full screen in a new tab' }, icon('play'), 'Preview'),
         h('button', { title: 'Make a full copy of this playout', onclick: async () => {
           if (editorDirty) await save();
           if (!editorDirty) cloneDialog(playout, (c) => { location.hash = `playout/${c.id}`; });
-        } }, 'Clone'),
+        } }, icon('copy'), 'Clone'),
         saveBtn),
       sideEl,
       h('div', { class: 'canvas-wrap' }, toolbar, area),
@@ -546,8 +717,7 @@
     async function save() {
       try {
         await PUT(`/api/playouts/${playout.id}`, playout);
-        editorDirty = false;
-        saveBtn.textContent = 'Save';
+        setDirty(false);
         toast('Saved. The stream picks up the changes right away.', 'ok');
       } catch (err) { fail(err); }
     }
@@ -567,6 +737,7 @@
     function renderAll() {
       document.getElementById('tab-slide').classList.toggle('active', S.mode === 'slide');
       document.getElementById('tab-overlay').classList.toggle('active', S.mode === 'overlay');
+      document.getElementById('tab-settings').classList.toggle('active', S.mode === 'settings');
       toolbar.style.display = S.mode === 'settings' || (S.mode === 'slide' && !slide()) ? 'none' : '';
       renderSide();
       renderProps();
@@ -576,14 +747,16 @@
     // ----- left column: slides and layers -----
     function renderSide() {
       const parts = [];
+      thumbHides.forEach((x) => x.hide());
+      thumbHides = [];
       if (S.mode !== 'overlay') {
-        parts.push(h('div', { class: 'row between' }, h('h3', { style: { margin: 0 } }, 'Scenes'),
-          h('div', { class: 'row', style: { gap: '4px' } },
-            h('button', { class: 'small', onclick: addSlide }, '+ Scene'),
-            h('button', { class: 'small', onclick: slidesFromMedia, title: 'Create one scene per image or video' }, '+ From media'))));
+        parts.push(h('div', { class: 'side-head' }, h('h3', null, `Scenes (${playout.slides.length})`)),
+          h('div', { class: 'side-actions' },
+            h('button', { class: 'primary small', onclick: addSlide, title: 'Add an empty scene' }, icon('plus'), 'New scene'),
+            h('button', { class: 'small', onclick: slidesFromMedia, title: 'Create one full-screen scene per image or video' }, icon('image'), 'From media')));
         let dragFrom = null;
-        parts.push(h('div', { class: 'slide-list', style: { marginTop: '8px' } }, playout.slides.map((sl, i) => {
-          const desc = [sl.feedId ? 'RSS' : null, sl.advance === 'video' ? 'until video ends' : `${sl.duration || 10}s`, sl.window ? 'scheduled' : null].filter(Boolean).join(' · ');
+        parts.push(h('div', { class: 'slide-list' }, playout.slides.map((sl, i) => {
+          const desc = [sl.feedId ? 'RSS' : null, sl.advance === 'video' ? 'until media ends' : `${sl.duration || 10}s`, sl.window ? 'scheduled' : null].filter(Boolean).join(' · ');
           const item = h('div', {
             class: `slide-item ${S.mode === 'slide' && i === S.slideIndex ? 'active' : ''} ${sl.enabled === false ? 'disabled' : ''}`,
             draggable: 'true',
@@ -600,9 +773,10 @@
               markDirty(); renderAll();
             },
           },
-          h('div', { class: 'num' }, String(i + 1)),
+          sceneThumb(sl, i + 1),
           h('div', { class: 'info' }, h('div', { class: 'n' }, sl.name || `Scene ${i + 1}`), h('div', { class: 'd' }, desc)),
-          h('input', { type: 'checkbox', title: 'Enabled', checked: sl.enabled !== false, onclick: (e) => e.stopPropagation(), onchange: (e) => { sl.enabled = e.target.checked; markDirty(); renderSide(); } }));
+          h('label', { class: 'switch small', title: sl.enabled !== false ? 'On: plays in the playout. Click to skip it.' : 'Off: skipped. Click to play it.', onclick: (e) => e.stopPropagation() },
+            h('input', { type: 'checkbox', checked: sl.enabled !== false, onchange: (e) => { sl.enabled = e.target.checked; markDirty(); renderSide(); } }), h('span')));
           return item;
         })));
         if (!playout.slides.length) parts.push(h('p', { class: 'muted' }, 'No scenes yet. Add a scene to start building.'));
@@ -611,20 +785,39 @@
       }
       const els = elements();
       if (els && S.mode !== 'settings') {
-        parts.push(h('h3', null, 'Layers'));
+        parts.push(h('div', { class: 'side-head' }, h('h3', null, `Layers (${els.length})`)));
+        const toggle = (e, key, on, offIcon, onIcon, title) => h('button', { class: `icon-btn ${on ? '' : 'off'}`, title, onclick: (ev) => { ev.stopPropagation(); e[key] = key === 'enabled' ? !on : on; markDirty(); renderSide(); drawCanvas(); } }, icon(on ? onIcon : offIcon));
         parts.push(h('div', { class: 'layer-list' }, [...els].sort((a, b) => (b.z || 0) - (a.z || 0)).map((e) => h('div', {
-          class: `layer-item ${S.selected === e.id ? 'active' : ''}`,
+          class: `layer-item ${S.selected === e.id ? 'active' : ''} ${e.enabled === false ? 'hidden' : ''}`,
           onclick: () => { S.selected = e.id; renderAll(); },
-        }, h('span', null, layerName(e)), h('small', null, `z ${e.z || 0}`)))));
-        if (!els.length) parts.push(h('p', { class: 'muted' }, 'Use the toolbar to add text, media, a ticker and more.'));
+        }, icon(ELEMENT_TYPES[e.type] ? e.type : 'box'), h('span', { class: 'ln' }, layerName(e)),
+          toggle(e, 'enabled', e.enabled !== false, 'eyeOff', 'eye', e.enabled !== false ? 'Visible. Click to hide it on air.' : 'Hidden on air. Click to show it.'),
+          toggle(e, 'locked', !e.locked, 'lock', 'unlock', e.locked ? 'Locked. Click to unlock.' : 'Click to lock it in place.')))));
+        if (!els.length) parts.push(h('p', { class: 'muted' }, 'Add text, media, a ticker and more with the buttons above the canvas.'));
       }
       put(sideEl, ...parts);
+    }
+
+    // A small, still preview of a scene for the scene list.
+    let thumbHides = [];
+    function sceneThumb(sl, n) {
+      const W = 112;
+      const H = Math.round((W * playout.height) / playout.width);
+      const inner = h('div', { class: 'thumb-stage', style: { width: `${playout.width}px`, height: `${playout.height}px`, transform: `scale(${W / playout.width})` } });
+      const bg = sl.backgroundMediaId && mediaById[sl.backgroundMediaId];
+      const r = window.Beeldkrant.renderSlide({ ...sl, backgroundMedia: bg ? { url: bg.url, type: bg.type } : null, elements: (sl.elements || []).map(resolveEl) },
+        { editor: true, thumb: true, timezone: region.timezone, locale: region.locale, playoutBackground: playout.backgroundColor });
+      inner.appendChild(r.node);
+      thumbHides.push(r);
+      return h('div', { class: 'scene-thumb', style: { width: `${W}px`, height: `${H}px` } }, inner, h('span', { class: 'num' }, String(n)));
     }
 
     function layerName(e) {
       const label = ELEMENT_TYPES[e.type] ? ELEMENT_TYPES[e.type].label : e.type;
       const m = e.mediaId && mediaById[e.mediaId];
-      const detail = e.type === 'text' ? String(e.text || '').split('\n')[0] : m ? m.name : e.type === 'image' && e.source === 'feed' ? 'feed image' : '';
+      const feed = e.feedId && feeds.find((f) => f.id === e.feedId);
+      const detail = e.type === 'text' ? String(e.text || '').split('\n')[0] : m ? m.name : e.type === 'image' && e.source === 'feed' ? 'feed image'
+        : e.items ? `${e.items.length} item${e.items.length === 1 ? '' : 's'}` : e.type === 'rss' && feed ? feed.name : '';
       return detail ? `${label}: ${detail.slice(0, 24)}` : label;
     }
 
@@ -686,7 +879,10 @@
 
     const resolveEl = (e) => {
       const m = e.mediaId && mediaById[e.mediaId];
-      return m ? { ...e, src: m.url, mediaType: m.type } : { ...e };
+      const out = m ? { ...e, src: m.url, mediaType: m.type } : { ...e };
+      if (Array.isArray(e.items)) out.sources = e.items.map((id) => mediaById[id]).filter(Boolean).map((x) => ({ id: x.id, src: x.url, type: x.type }));
+      if (e.enabled === false) out.opacity = 25; // hidden on air: faint in the editor
+      return out;
     };
 
     let drawToken = 0;
@@ -844,7 +1040,8 @@
         parts.push(h('h2', null, 'Scene'),
           h('div', { class: 'fields' },
             field('Name', bind(sl, 'name', changedSide), { wide: true }),
-            field('Move on', bind(sl, 'advance', () => { changedSide(); renderProps(); }, 'select', { options: [['duration', 'After the duration'], ['video', 'When the video ends']] })),
+            field('Move on', bind(sl, 'advance', () => { changedSide(); renderProps(); }, 'select', { options: [['duration', 'After the duration'], ['video', 'When the media has played']] }),
+              { hint: sl.advance === 'video' ? 'Waits for videos to end, and for carousels and RSS feeds to show every item once.' : null }),
             field(sl.advance === 'video' ? 'Fallback duration (s)' : 'Duration (s)', bind(sl, 'duration', changedSide, 'number', { min: 1, step: 1 })),
             field('Transition in', bind(sl, 'transition', changed, 'select', { options: [['', `Playout default (${playout.transition || 'fade'})`], ...TRANSITIONS.map((t) => [t, t])] })),
             field('Transition time (ms)', bind(sl, 'transitionMs', changed, 'number', { min: 0, max: 5000, step: 100, placeholder: String(playout.transitionMs ?? 800) })),
@@ -860,8 +1057,8 @@
           h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!sl.window, onchange: (ev) => { sl.window = ev.target.checked ? { days: [], start: '08:00', end: '18:00' } : null; changedSide(); renderProps(); } }), 'Only show this scene at certain times'),
           sl.window ? windowFields(sl.window, changedSide) : null,
           h('div', { class: 'row', style: { marginTop: '18px' } },
-            h('button', { onclick: () => { const c = clone(sl); c.id = uid(); c.name += ' (copy)'; c.elements.forEach((x) => { x.id = uid(); }); playout.slides.splice(S.slideIndex + 1, 0, c); S.slideIndex++; markDirty(); renderAll(); } }, 'Duplicate'),
-            h('button', { class: 'ghost', onclick: async () => { if (await confirmBox(`Delete scene "${sl.name}"?`)) { playout.slides.splice(S.slideIndex, 1); S.slideIndex = Math.min(S.slideIndex, playout.slides.length - 1); S.selected = null; markDirty(); renderAll(); } } }, 'Delete scene')));
+            h('button', { onclick: () => { const c = clone(sl); c.id = uid(); c.name += ' (copy)'; c.elements.forEach((x) => { x.id = uid(); }); playout.slides.splice(S.slideIndex + 1, 0, c); S.slideIndex++; markDirty(); renderAll(); } }, icon('copy'), 'Duplicate scene'),
+            h('button', { class: 'danger-outline', onclick: async () => { if (await confirmBox(`Delete scene "${sl.name}"?`)) { playout.slides.splice(S.slideIndex, 1); S.slideIndex = Math.min(S.slideIndex, playout.slides.length - 1); S.selected = null; markDirty(); renderAll(); } } }, icon('trash'), 'Delete scene')));
       } else if (S.mode === 'overlay') {
         parts.push(h('h2', null, 'Overlays'), h('p', { class: 'muted' }, 'Select an element on the canvas to edit it.'));
       } else {
@@ -903,20 +1100,73 @@
           field('Start date', bind(win, 'startDate', onChange, 'date')), field('End date', bind(win, 'endDate', onChange, 'date'))));
     }
 
+    // In order or random, for carousels.
+    function orderField(e, onChange, what) {
+      return h('div', { class: 'seg seg-wide', role: 'group', 'aria-label': 'Order' },
+        [['fixed', 'list', 'In this order'], ['random', 'shuffle', 'Random']].map(([v, ic, label]) => h('button', {
+          class: (e.order || 'fixed') === v ? 'active' : '',
+          title: v === 'random' ? `Shuffles the ${what} every round` : `Plays the ${what} top to bottom; drag to change the order`,
+          onclick: () => { e.order = v; onChange(); },
+        }, icon(ic), label)));
+    }
+
+    // The media of a carousel: add from the library, drag or use the arrows to reorder, remove.
+    function mediaListEditor(e, type, onChange) {
+      e.items = (e.items || []).filter((id) => mediaById[id]);
+      const random = e.order === 'random';
+      let dragFrom = null;
+      const move = (from, to) => { const [x] = e.items.splice(from, 1); e.items.splice(to, 0, x); onChange(); };
+      const rows = e.items.map((id, i) => {
+        const m = mediaById[id];
+        const row = h('div', {
+          class: 'media-row', draggable: 'true',
+          ondragstart: () => { dragFrom = i; row.classList.add('dragging'); },
+          ondragend: () => row.classList.remove('dragging'),
+          ondragover: (ev) => ev.preventDefault(),
+          ondrop: (ev) => { ev.preventDefault(); if (dragFrom != null && dragFrom !== i) move(dragFrom, i); },
+        },
+        h('span', { class: 'grip', title: 'Drag to reorder' }, icon('grip')),
+        random ? null : h('span', { class: 'pos' }, String(i + 1)),
+        h('div', { class: 'mthumb', style: m.thumbUrl ? { backgroundImage: `url("${m.thumbUrl}")` } : {} }, m.thumbUrl ? null : icon(type)),
+        h('div', { class: 'mname' }, h('div', { title: m.name }, m.name), m.duration ? h('small', null, `${Math.round(m.duration)} s`) : null),
+        h('button', { class: 'icon-btn', title: 'Move up', disabled: i === 0, onclick: () => move(i, i - 1) }, icon('up')),
+        h('button', { class: 'icon-btn', title: 'Move down', disabled: i === e.items.length - 1, onclick: () => move(i, i + 1) }, icon('down')),
+        h('button', { class: 'icon-btn del', title: 'Remove from the carousel', onclick: () => { e.items.splice(i, 1); onChange(); } }, icon('close')));
+        return row;
+      });
+      const add = () => {
+        const chosen = new Set();
+        const filter = (x) => x.type === type;
+        modal(`Add ${type === 'image' ? 'photos' : 'videos'}`, h('div', { class: 'stack' },
+          h('p', { class: 'muted' }, 'Click the files to add, in the order you want them. You can reorder them afterwards.'),
+          media.some(filter) ? folderBrowser(media, folders, { filter, multi: chosen }) : h('p', null, 'No matching media. Upload files under Media management first.')),
+        (close) => [h('button', { onclick: close }, 'Cancel'), h('button', { class: 'primary', onclick: () => { e.items.push(...chosen); close(); onChange(); } }, 'Add')]);
+      };
+      const total = type === 'video' ? e.items.reduce((sum, id) => sum + (Number(mediaById[id].duration) || 0), 0) : 0;
+      return h('div', { class: 'media-list' },
+        h('div', { class: 'row between' },
+          h('b', null, `${e.items.length} ${type === 'image' ? 'photo' : 'video'}${e.items.length === 1 ? '' : 's'}`, total ? h('small', { class: 'muted' }, ` · ${Math.floor(total / 60)}:${String(Math.round(total % 60)).padStart(2, '0')} in total`) : null),
+          h('button', { class: 'small primary', onclick: add }, icon('plus'), type === 'image' ? 'Add photos' : 'Add videos')),
+        rows.length ? h('div', { class: 'media-rows' }, rows) : h('p', { class: 'muted' }, `No ${type === 'image' ? 'photos' : 'videos'} yet.`),
+        random && rows.length > 1 ? h('p', { class: 'hint' }, 'Random: the order changes every round, and no item plays twice in a row.') : null);
+    }
+
     function elementProps(e, changed) {
       const t = ELEMENT_TYPES[e.type] || { label: e.type };
       const rerender = () => { changed(); renderProps(); };
-      const out = [h('div', { class: 'row between' }, h('h2', { style: { margin: 0 } }, t.label),
-        h('button', { class: 'small ghost', onclick: () => { S.selected = null; renderAll(); } }, 'Done'))];
+      const out = [h('div', { class: 'props-head' }, icon(ELEMENT_TYPES[e.type] ? e.type : 'box'), h('h2', null, t.label),
+        h('button', { class: 'icon-btn', title: 'Duplicate', onclick: () => { const els = elements(); const c = { ...clone(e), id: uid(), x: e.x + 20, y: e.y + 20 }; els.push(c); S.selected = c.id; markDirty(); renderAll(); } }, icon('copy')),
+        h('button', { class: 'icon-btn del', title: 'Delete', onclick: () => removeElement(e.id) }, icon('trash')),
+        h('button', { class: 'icon-btn', title: 'Close (deselect)', onclick: () => { S.selected = null; renderAll(); } }, icon('close')))];
       out.push(h('h3', null, 'Position'), h('div', { class: 'fields' },
         field('X', bind(e, 'x', changed, 'number')), field('Y', bind(e, 'y', changed, 'number')),
         field('Width', bind(e, 'w', changed, 'number', { min: 1 })), field('Height', bind(e, 'h', changed, 'number', { min: 1 })),
         field('Layer (z)', bind(e, 'z', () => { changed(); renderSide(); }, 'number')), field('Opacity %', bind(e, 'opacity', changed, 'number', { min: 0, max: 100, placeholder: '100' })),
         field('Corner radius', bind(e, 'radius', changed, 'number', { min: 0 })), field('Rotation°', bind(e, 'rotate', changed, 'number')),
         h('div', { class: 'row wide' },
-          h('button', { class: 'small', onclick: () => { Object.assign(e, { x: 0, y: 0, w: playout.width, h: playout.height }); rerender(); } }, 'Full screen'),
-          h('button', { class: 'small', onclick: () => { e.x = Math.round((playout.width - e.w) / 2); e.y = Math.round((playout.height - e.h) / 2); rerender(); } }, 'Centre'),
-          h('label', { class: 'check' }, bind(e, 'locked', () => {}, 'checkbox'), 'Lock'))));
+          h('button', { class: 'small', onclick: () => { Object.assign(e, { x: 0, y: 0, w: playout.width, h: playout.height }); rerender(); } }, icon('maximize'), 'Full screen'),
+          h('button', { class: 'small', onclick: () => { e.x = Math.round((playout.width - e.w) / 2); e.y = Math.round((playout.height - e.h) / 2); rerender(); } }, icon('center'), 'Centre'),
+          h('label', { class: 'check' }, bind(e, 'locked', () => renderSide(), 'checkbox'), 'Lock'))));
       out.push(h('h3', null, 'Content'));
       const fontFields = (size = 48) => [
         field('Font size (px)', bind(e, 'fontSize', changed, 'number', { min: 6, placeholder: String(size) })),
@@ -952,6 +1202,42 @@
             h('label', { class: 'check wide' }, bind(e, 'loop', changed, 'checkbox'), 'Loop (the scene then uses its duration)')),
           h('p', { class: 'hint' }, 'Set the scene to "When the video ends" to go to the next scene automatically.'));
           break;
+        case 'slideshow':
+          out.push(orderField(e, rerender, 'photos'), mediaListEditor(e, 'image', rerender), h('div', { class: 'fields' },
+            field('Each photo (s)', bind(e, 'interval', changed, 'number', { min: 1, placeholder: '5' })),
+            field('Fit', bind(e, 'fit', changed, 'select', { options: [['cover', 'Fill (crop)'], ['contain', 'Fit (letterbox)'], ['fill', 'Stretch']] })),
+            field('Transition', bind(e, 'transition', changed, 'select', { options: [['fade', 'Fade'], ['slide-left', 'Slide'], ['slide-up', 'Slide up'], ['zoom', 'Zoom'], ['cut', 'Cut']] })),
+            field('Transition time (ms)', bind(e, 'transitionMs', changed, 'number', { min: 0, max: 5000, step: 100, placeholder: '800' })),
+            field('Background', bind(e, 'background', changed, 'color', { fallback: '#000000' }), { wide: true })),
+          h('p', { class: 'hint' }, 'The carousel keeps going round while the scene is on screen. Set the scene to "When the media has played" to move on after every photo was shown once.'));
+          break;
+        case 'playlist':
+          out.push(orderField(e, rerender, 'videos'), mediaListEditor(e, 'video', rerender), h('div', { class: 'fields' },
+            field('Fit', bind(e, 'fit', changed, 'select', { options: [['cover', 'Fill (crop)'], ['contain', 'Fit (letterbox)'], ['fill', 'Stretch']] })),
+            h('label', { class: 'check' }, bind(e, 'audio', changed, 'checkbox'), 'Play audio')),
+          h('p', { class: 'hint' }, 'The videos play back to back and start over while the scene is on screen. Set the scene to "When the media has played" to move on after the last video.'));
+          break;
+        case 'rss': {
+          const feed = feeds.find((f) => f.id === e.feedId);
+          out.push(h('div', { class: 'fields' },
+            field('Feed', bind(e, 'feedId', () => { feedPreview = {}; rerender(); renderSide(); }, 'select', { options: feedOptions }), { wide: true, hint: feed ? `This feed shows its ${feed.maxItems || 10} newest items (set under Media management → RSS feeds).` : 'Add feeds under Media management → RSS feeds.' }),
+            field('Layout', bind(e, 'layout', rerender, 'select', { options: [['list', 'List: photo left, text right'], ['grid', 'Grid of cards'], ['single', 'One item at a time, photo full size']] }), { wide: true }),
+            e.layout === 'single' ? null : field('Items per page', bind(e, 'perPage', changed, 'number', { min: 1, max: 24, placeholder: e.layout === 'grid' ? '6' : '4' })),
+            e.layout === 'grid' ? field('Columns', bind(e, 'columns', changed, 'number', { min: 1, max: 8, placeholder: '3' })) : null,
+            field(e.layout === 'single' ? 'Each item (s)' : 'Each page (s)', bind(e, 'interval', changed, 'number', { min: 2, placeholder: '8' })),
+            field('Show at most', bind(e, 'maxItems', changed, 'number', { min: 1, placeholder: 'all' }), { hint: 'Fewer than the feed setting, if you like.' }),
+            h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: e.showImage !== false, onchange: (ev) => { e.showImage = ev.target.checked; changed(); } }), 'Photos'),
+            h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: e.showDescription !== false, onchange: (ev) => { e.showDescription = ev.target.checked; changed(); } }), 'Text'),
+            h('label', { class: 'check' }, bind(e, 'showDate', changed, 'checkbox'), 'Date'),
+            field('Text lines', bind(e, 'descLines', changed, 'number', { min: 1, max: 12, placeholder: e.layout === 'single' ? '4' : '2' })),
+            field('Title size (px)', bind(e, 'fontSize', changed, 'number', { min: 8, placeholder: '40' })),
+            field('Spacing (px)', bind(e, 'gap', changed, 'number', { min: 0, placeholder: '20' })),
+            field('Text colour', bind(e, 'color', changed, 'color', { fallback: '#ffffff' }), { wide: true }),
+            field('Card background', bind(e, 'cardBackground', changed, 'color'), { wide: true, hint: 'rgba(0,0,0,0.45) gives see-through cards' }),
+            field('Font family', bind(e, 'fontFamily', changed, 'text', { placeholder: 'DejaVu Sans' }), { wide: true })),
+          h('p', { class: 'hint' }, 'Pages through the items when they do not all fit, and picks up new items every round. Set the scene to "When the media has played" to move on after the last page.'));
+          break;
+        }
         case 'ticker':
           out.push(h('div', { class: 'fields' },
             field('Source', bind(e, 'source', rerender, 'select', { options: [['text', 'Own text'], ['feed', 'RSS feed headlines']] }), { wide: true }),
@@ -996,8 +1282,8 @@
         default:
       }
       out.push(h('div', { class: 'row', style: { marginTop: '18px' } },
-        h('button', { onclick: () => { const els = elements(); const c = { ...clone(e), id: uid(), x: e.x + 20, y: e.y + 20 }; els.push(c); S.selected = c.id; markDirty(); renderAll(); } }, 'Duplicate'),
-        h('button', { class: 'ghost', onclick: () => removeElement(e.id) }, 'Delete')));
+        h('button', { onclick: () => { const els = elements(); const c = { ...clone(e), id: uid(), x: e.x + 20, y: e.y + 20 }; els.push(c); S.selected = c.id; markDirty(); renderAll(); } }, icon('copy'), 'Duplicate'),
+        h('button', { class: 'danger-outline', onclick: () => removeElement(e.id) }, icon('trash'), 'Delete')));
       return out;
     }
 
@@ -1077,9 +1363,8 @@
     let cur = folders.some((f) => f.id === lastFolderId) ? lastFolderId : null;
     let q = '';
     const input = h('input', { type: 'file', multiple: true, accept: 'image/*,video/mp4,video/webm,video/quicktime,video/x-matroska,audio/*,.mp4,.mov,.mkv,.webm,.mp3,.m4a,.aac,.ogg,.wav,.flac', style: { display: 'none' } });
-    const progress = h('div', { class: 'progress', style: { display: 'none', marginTop: '10px' } }, h('div'));
     const dropLabel = h('span');
-    const drop = h('div', { class: 'dropzone', onclick: () => input.click() }, dropLabel, h('div', { class: 'hint' }, 'Images: jpg, png, gif, webp, svg · Video: mp4, webm, mov, mkv · Audio: mp3, m4a, aac, ogg, wav, flac'), progress);
+    const drop = h('div', { class: 'dropzone', onclick: () => input.click() }, dropLabel, h('div', { class: 'hint' }, 'You can select or drop many files at once; each one shows its own progress, speed and time left. Images: jpg, png, gif, webp, svg · Video: mp4, webm, mov, mkv · Audio: mp3, m4a, aac, ogg, wav, flac'));
     const crumbsEl = h('div');
     const listEl = h('div');
     const search = h('input', { type: 'search', placeholder: 'Search all folders', oninput: (e) => { q = e.target.value.trim().toLowerCase(); draw(); } });
@@ -1141,26 +1426,15 @@
 
     function upload(files) {
       if (!files.length) return;
-      const fd = new FormData();
-      for (const f of files) fd.append('files', f);
-      const xhr = new XMLHttpRequest();
       const query = new URLSearchParams();
       if (cur) query.set('folderId', cur);
       if (arg === 'ads') query.set('ad', '1');
-      xhr.open('POST', `/api/media?${query}`);
-      progress.style.display = '';
-      xhr.upload.onprogress = (e) => { if (e.lengthComputable) progress.firstChild.style.width = `${(e.loaded / e.total) * 100}%`; };
-      xhr.onload = () => {
-        progress.style.display = 'none';
-        if (xhr.status >= 200 && xhr.status < 300) { toast('Upload complete', 'ok'); reload(); } else {
-          let msg = 'Upload failed';
-          try { msg = JSON.parse(xhr.responseText).error || msg; } catch { /* keep */ }
-          toast(msg, 'err');
-        }
-      };
-      xhr.onerror = () => { progress.style.display = 'none'; toast('Upload failed', 'err'); };
-      xhr.send(fd);
+      queueUploads(files, query, cur ? folderTrail(folders, cur).map((f) => f.name).join(' / ') : 'Media');
     }
+    // Refresh the list as files finish, while this page is open.
+    let reloadTimer;
+    const onUploaded = () => { if (!document.body.contains(listEl)) { uploads.listeners.delete(onUploaded); return; } clearTimeout(reloadTimer); reloadTimer = setTimeout(reload, 400); };
+    uploads.listeners.add(onUploaded);
     input.onchange = () => { upload(input.files); input.value = ''; };
     const isFileDrag = (e) => e.dataTransfer.types.includes('Files');
     drop.addEventListener('dragover', (e) => { if (!isFileDrag(e)) return; e.preventDefault(); drop.classList.add('over'); });
@@ -1236,13 +1510,14 @@
   async function pageFeeds(main) {
     const feeds = await GET('/api/feeds');
     const edit = (feed) => {
-      const data = feed ? clone(feed) : { name: '', url: '', refreshMinutes: 10 };
+      const data = feed ? clone(feed) : { name: '', url: '', refreshMinutes: 10, maxItems: 10 };
       const previewBox = h('div', { class: 'stack' });
       modal(feed ? 'Edit feed' : 'Add RSS feed', h('div', { class: 'stack' },
         h('div', { class: 'fields' },
           field('Name', bind(data, 'name', () => {}), { wide: true }),
           field('Feed URL (RSS or Atom)', bind(data, 'url', () => {}, 'url', { placeholder: 'https://example.com/rss.xml' }), { wide: true }),
-          field('Refresh every (minutes)', bind(data, 'refreshMinutes', () => {}, 'number', { min: 1 }))),
+          field('Refresh every (minutes)', bind(data, 'refreshMinutes', () => {}, 'number', { min: 1 })),
+          field('Number of items', bind(data, 'maxItems', () => {}, 'number', { min: 1, max: 100, placeholder: '10' }), { hint: 'How many of the newest items scenes, tickers and RSS elements show.' })),
         previewBox),
       (close) => [
         feed ? h('button', { onclick: async () => {
@@ -1251,8 +1526,10 @@
             await PUT(`/api/feeds/${feed.id}`, data);
             const res = await GET(`/api/feeds/${feed.id}/items?force=1`);
             put(previewBox, 
-              res.error ? h('div', { class: 'badge err' }, res.error) : h('div', { class: 'badge ok' }, `${res.items.length} items`),
-              ...res.items.slice(0, 6).map((i) => h('div', { class: 'card', style: { padding: '10px' } }, h('b', null, i.title), h('div', { class: 'muted' }, (i.description || '').slice(0, 160)), i.image ? h('small', null, 'with image') : null)));
+              res.error ? h('div', { class: 'badge err' }, res.error) : h('div', { class: 'badge ok' }, `Showing ${res.items.length} of ${res.total ?? res.items.length} items`),
+              ...res.items.slice(0, 6).map((i) => h('div', { class: 'feed-preview-item' },
+                i.image ? h('img', { src: i.image, alt: '', loading: 'lazy' }) : h('div', { class: 'feed-noimg' }, 'No photo'),
+                h('div', null, h('b', null, i.title), h('div', { class: 'muted' }, (i.description || '').slice(0, 160))))));
           } catch (err) { put(previewBox, h('div', { class: 'badge err' }, err.message)); }
         } }, 'Test feed') : null,
         h('button', { onclick: close }, 'Cancel'),
@@ -1266,10 +1543,10 @@
       ]);
     };
     main.append(h('div', { class: 'row between' }, h('h1', null, 'RSS feeds'), h('button', { class: 'primary', onclick: () => edit(null) }, '+ Add feed')),
-      h('p', { class: 'muted' }, 'Use a feed in a scene (shown once per item through the scene template) or as ticker headlines.'),
+      h('p', { class: 'muted' }, 'Show a feed with photos and text with the RSS feed element, repeat a scene once per item (scene template), or use it as ticker headlines.'),
       feeds.length ? h('div', { class: 'card' }, h('table', null,
-        h('tr', null, h('th', null, 'Name'), h('th', null, 'URL'), h('th', null, 'Refresh'), h('th', null, '')),
-        feeds.map((f) => h('tr', null, h('td', null, f.name), h('td', { class: 'muted' }, f.url), h('td', null, `${f.refreshMinutes || 10} min`),
+        h('tr', null, h('th', null, 'Name'), h('th', null, 'URL'), h('th', null, 'Items'), h('th', null, 'Refresh'), h('th', null, '')),
+        feeds.map((f) => h('tr', null, h('td', null, f.name), h('td', { class: 'muted' }, f.url), h('td', null, String(f.maxItems || 10)), h('td', null, `${f.refreshMinutes || 10} min`),
           h('td', { style: { textAlign: 'right' } },
             h('button', { onclick: () => edit(f) }, 'Edit'), ' ',
             h('button', { class: 'ghost', onclick: async () => { if (await confirmBox(`Delete feed "${f.name}"?`)) { await DEL(`/api/feeds/${f.id}`); route(); } } }, 'Delete')))))) : h('div', { class: 'card' }, 'No feeds yet.'));

@@ -150,7 +150,7 @@
     const tr = TRANSITIONS[type] || TRANSITIONS.fade;
     rendered.show();
     const prev = current;
-    const ducked = (slide.elements || []).some((e) => e.type === 'video' && e.audio && e.src);
+    const ducked = (slide.elements || []).some((e) => e.audio && ((e.type === 'video' && e.src) || (e.type === 'playlist' && (e.sources || []).length)));
     current = { rendered, layer, ducked };
     setMusicLevel(ducked);
     if (tr && ms > 0 && prev) {
@@ -176,7 +176,8 @@
     if (!slide.feedId) return [{}];
     try {
       const data = await feedItems(slide.feedId);
-      return (data.items || []).slice(0, Number(slide.feedMaxItems) || 5).map((item) => ({ item: { ...item, feedTitle: data.title } }));
+      // The feed already holds the number of items set on the feed; a scene can show fewer.
+      return (data.items || []).slice(0, Number(slide.feedMaxItems) || undefined).map((item) => ({ item: { ...item, feedTitle: data.title } }));
     } catch {
       return [];
     }

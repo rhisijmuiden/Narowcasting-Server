@@ -109,6 +109,29 @@ The dashboard shows what is on air: the playout, any playouts routed to their ow
   <img src="docs/screenshots/playout-settings.png" alt="Playout settings with background music and ad blocks" width="49%">
 </p>
 
+### The scene editor
+
+The top bar switches between *Scenes*, *Overlays* and *Playout settings*, and holds *Preview*, *Clone* and *Save* (or Ctrl+S); "Unsaved changes" shows until you save. Add elements with the buttons above the canvas, grouped in *Text and info* (text, ticker, clock, weather, RSS feed), *Media* (image, video, photo carousel, video carousel) and *Other* (box, web page). The scene list shows a thumbnail of every scene with a switch to turn it off; the layer list shows the elements of the scene, with an eye to hide one and a lock to stop it moving.
+
+**Photo carousel** shows several photos in one place, one after another. Choose the time per photo, the transition (fade, slide left, slide up, zoom or cut) and the order: *In this order* or *Random*. *Add photos* opens the media folders, where you tick several photos at once; change the order by dragging the rows or with the arrows. **Video carousel** does the same with videos: they play back to back in your order or at random, with or without sound, and the editor shows their total length.
+
+<p>
+  <img src="docs/screenshots/editor-photo-carousel.png" alt="Photo carousel selected, with its photo list, order and transition" width="49%">
+  <img src="docs/screenshots/editor-add-photos.png" alt="Adding several photos to a carousel from the media folders" width="49%">
+</p>
+<p>
+  <img src="docs/screenshots/editor-video-carousel.png" alt="Video carousel with two videos in a random order" width="49%">
+  <img src="docs/screenshots/editor-rss.png" alt="RSS feed element as a list, with its layout options" width="49%">
+</p>
+
+**RSS feed** shows a whole feed on a scene with photos, titles, text and dates. Pick a layout: a *list*, a *grid* of cards or *one item at a time*, then how many items go on a page and how long each page stays. With *Move on: when the media has played* the scene moves on after all pages (and after one full round of a carousel, or when a video has ended).
+
+<p>
+  <img src="docs/screenshots/player-rss-list.png" alt="RSS list on air" width="32%">
+  <img src="docs/screenshots/player-rss-grid.png" alt="RSS grid on air" width="32%">
+  <img src="docs/screenshots/player-rss-single.png" alt="One RSS item at a time on air" width="32%">
+</p>
+
 **Clone** (in the list and in the editor) makes a full copy of a playout: every scene, overlay, ad block and the music. Use it for a variant, such as a clean feed without overlays or ads, and route that copy to its own output.
 
 ![Clone dialog: name the copy](docs/screenshots/playout-clone.png)
@@ -125,6 +148,12 @@ The dashboard shows what is on air: the playout, any playouts routed to their ow
 
 *Media management* opens with an overview of everything you have: files and folders, video, audio, ads, RSS feeds and input streams. Keep media tidy in **folders**: create folders (and subfolders) under *Media folders*, upload straight into the folder you have open, and move files by dragging them onto a folder or a breadcrumb, or with *Move*. Deleting a folder keeps its files: they move up one level. The media pickers in the scene editor browse the same folders and can search all of them. *Video*, *Audio* and *Ads* list those files across all folders. Mark a file as an ad (commercial) with its *Ad* button, or upload under *Ads* to mark new files straight away.
 
+**Uploading**: choose or drop as many files as you like. A panel at the bottom right lists every file with its own progress bar, speed and time left, plus the total; files go up three at a time, and you can cancel or retry each one. The panel stays while you move to other pages, so you can keep working.
+
+<p>
+  <img src="docs/screenshots/media-uploads.png" alt="Upload panel with several files uploading, each with speed and time left" width="49%">
+  <img src="docs/screenshots/media-uploads-done.png" alt="Upload panel after the uploads, with a cancelled and a failed file" width="49%">
+</p>
 <p>
   <img src="docs/screenshots/media-overview.png" alt="Media management overview" width="49%">
   <img src="docs/screenshots/media-folders.png" alt="Media folders with upload and folders" width="49%">
@@ -134,10 +163,13 @@ The dashboard shows what is on air: the playout, any playouts routed to their ow
   <img src="docs/screenshots/media-ads.png" alt="Ads: files marked as commercials" width="49%">
 </p>
 
-*RSS feeds* lists the feeds that RSS scenes use, with a preview of their items. *Input streams* lists the Icecast/Shoutcast streams, lets you listen to them and shows which playouts use them as background music.
+*RSS feeds* lists the feeds that RSS elements, RSS scenes and tickers use. Set per feed how many of the newest items go round (*Number of items*, 10 by default); *Test feed* shows them with their photos. *Input streams* lists the Icecast/Shoutcast streams, lets you listen to them and shows which playouts use them as background music.
 
 <p>
+  <img src="docs/screenshots/rss-feed-edit.png" alt="Editing a feed: number of items and a preview with photos" width="49%">
   <img src="docs/screenshots/rss-feeds.png" alt="RSS feeds" width="49%">
+</p>
+<p>
   <img src="docs/screenshots/input-streams.png" alt="Icecast/Shoutcast input streams" width="49%">
 </p>
 
