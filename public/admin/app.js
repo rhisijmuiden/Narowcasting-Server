@@ -3,6 +3,8 @@
   'use strict';
 
   const app = document.getElementById('app');
+  // The path the app is served under: '' at the root, e.g. /channel1 behind a station proxy (see render.js).
+  const BASE = window.Beeldkrant.base;
   let me = null;
 
   // ---------- helpers ----------
@@ -34,7 +36,7 @@
     const opts = { method, headers: {}, credentials: 'same-origin' };
     if (body instanceof FormData) opts.body = body;
     else if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-    const res = await fetch(url, opts);
+    const res = await fetch(BASE + url, opts);
     const data = await res.json().catch(() => ({}));
     if (res.status === 401 && !url.endsWith('/login')) { me = null; route(); throw new Error('Please log in'); }
     if (res.status === 403 && data.mustChangePassword) { me.user.mustChangePassword = true; route(); throw new Error(data.error); }
@@ -87,7 +89,7 @@
     u.error = null;
     u.started = performance.now();
     u.samples = [[u.started, 0]];
-    xhr.open('POST', `/api/media?${u.query}`);
+    xhr.open('POST', `${BASE}/api/media?${u.query}`);
     xhr.upload.onprogress = (e) => {
       const now = performance.now();
       u.loaded = e.loaded;
@@ -446,7 +448,7 @@
     put(app, h('div', { class: 'login' }, h('form', { class: 'card stack', onsubmit: submit },
       brand(),
       ssoError ? h('div', { class: 'cam-result err' }, h('b', null, 'Microsoft sign-in failed'), h('span', null, ssoError)) : null,
-      opts.sso ? h('a', { class: 'btn ms-btn', href: '/api/sso/start' }, msLogo(), opts.sso.label) : null,
+      opts.sso ? h('a', { class: 'btn ms-btn', href: `${BASE}/api/sso/start` }, msLogo(), opts.sso.label) : null,
       opts.sso ? h('div', { class: 'login-or' }, h('span', null, 'or with a password')) : null,
       field('Username', user), field('Password', pass),
       h('button', { class: 'primary', type: 'submit' }, 'Log in'),
@@ -488,7 +490,7 @@
     return h('ol', { class: 'mfa-steps' },
       h('li', null, h('b', null, 'Install an authenticator app'), h('div', { class: 'hint' }, 'Such as Microsoft Authenticator, Google Authenticator, 1Password or Authy.')),
       h('li', null, h('b', null, 'Scan this QR code with the app'),
-        h('div', { class: 'mfa-qr' }, h('img', { src: `/api/qr?text=${encodeURIComponent(otpauth)}`, alt: 'QR code for the authenticator app' }),
+        h('div', { class: 'mfa-qr' }, h('img', { src: `${BASE}/api/qr?text=${encodeURIComponent(otpauth)}`, alt: 'QR code for the authenticator app' }),
           h('div', { class: 'hint' }, 'Or enter this key by hand:', h('code', { class: 'mfa-key' }, secret.replace(/(.{4})/g, '$1 ').trim())))),
       h('li', null, h('b', null, 'Enter the 6-digit code the app shows'), codeInput));
   }
@@ -545,8 +547,8 @@
       h('h1', null, 'Dashboard'),
       h('div', { class: 'grid two' },
         h('div', { class: 'card stack' }, h('h2', null, 'On air'), statusBox),
-        h('div', { class: 'card' }, h('div', { class: 'row between' }, h('h2', null, 'Live preview'), h('a', { href: '/player/', target: '_blank' }, 'Open full screen')),
-          h('iframe', { class: 'preview-frame', src: '/player/' })),
+        h('div', { class: 'card' }, h('div', { class: 'row between' }, h('h2', null, 'Live preview'), h('a', { href: `${BASE}/player/`, target: '_blank' }, 'Open full screen')),
+          h('iframe', { class: 'preview-frame', src: `${BASE}/player/` })),
       ),
       h('div', { class: 'card', style: { marginTop: '16px' } }, h('h2', null, 'Renderer log'), logs));
 
@@ -610,7 +612,7 @@
           h('td', null, p.id === settings.activePlayoutId ? h('span', { class: 'badge ok' }, h('span', { class: 'dot' }), 'On air') : '', ' ',
             routed(p).length ? h('a', { class: 'badge', href: '#routing', title: routed(p).map((o) => o.name).join(', ') }, `Routed to ${routed(p).length} output${routed(p).length === 1 ? '' : 's'}`) : ''),
           h('td', { style: { textAlign: 'right' } },
-            h('a', { class: 'btn', href: `/player/?playout=${p.id}`, target: '_blank' }, 'Preview'), ' ',
+            h('a', { class: 'btn', href: `${BASE}/player/?playout=${p.id}`, target: '_blank' }, 'Preview'), ' ',
             h('button', { onclick: () => cloneDialog(p, () => route()) }, 'Clone'), ' ',
             h('button', { class: 'ghost', onclick: async () => { if (await confirmBox(`Delete playout "${p.name}"?`)) { await DEL(`/api/playouts/${p.id}`); route(); } } }, 'Delete')),
         )))) : h('div', { class: 'card' }, h('p', null, 'No playouts yet. A playout is a channel: a resolution and a series of scenes.')),
@@ -780,7 +782,7 @@
           tab('tab-settings', 'settings', 'settings', 'Playout settings')),
         h('div', { class: 'grow' }),
         unsaved,
-        h('a', { class: 'btn', href: `/player/?playout=${playout.id}`, target: '_blank', title: 'Open the playout full screen in a new tab' }, icon('play'), 'Preview'),
+        h('a', { class: 'btn', href: `${BASE}/player/?playout=${playout.id}`, target: '_blank', title: 'Open the playout full screen in a new tab' }, icon('play'), 'Preview'),
         h('button', { title: 'Make a full copy of this playout', onclick: async () => {
           if (editorDirty) await save();
           if (!editorDirty) cloneDialog(playout, (c) => { location.hash = `playout/${c.id}`; });
@@ -959,7 +961,7 @@
       const out = m ? { ...e, src: m.url, mediaType: m.type } : { ...e };
       if (Array.isArray(e.items)) out.sources = e.items.map((id) => mediaById[id]).filter(Boolean).map((x) => ({ id: x.id, src: x.url, type: x.type }));
       const cam = e.type === 'camera' && cams.find((c) => c.id === e.cameraId);
-      if (cam) Object.assign(out, { src: `/api/player/camera/${cam.id}`, snapshot: `/api/player/camera/${cam.id}/snapshot`, cameraName: cam.name });
+      if (cam) Object.assign(out, { src: `${BASE}/api/player/camera/${cam.id}`, snapshot: `${BASE}/api/player/camera/${cam.id}/snapshot`, cameraName: cam.name });
       if (e.enabled === false) out.opacity = 25; // hidden on air: faint in the editor
       return out;
     };
@@ -2054,7 +2056,7 @@
     const general = { panelName: settings.panelName || 'Beeldkrant' };
     const server = { serverAddress: settings.serverAddress || '', port: settings.port };
     const region = { timezone: settings.timezone, locale: settings.locale };
-    const panelUrl = () => `http://${server.serverAddress || location.hostname}:${server.port}/admin/`;
+    const panelUrl = () => `http://${server.serverAddress || location.hostname}:${server.port}${BASE}/admin/`;
     const urlHint = h('div', { class: 'hint' });
     const showUrl = () => { urlHint.textContent = `The panel is reached at ${panelUrl()}`; };
     showUrl();
@@ -2066,7 +2068,7 @@
           const r = await PUT('/api/settings/server', server);
           if (r.moved) {
             toast(`Beeldkrant now listens on port ${r.port}. Taking you there…`, 'ok');
-            setTimeout(() => { location.href = `${location.protocol}//${location.hostname}:${r.port}/admin/#settings`; }, 1200);
+            setTimeout(() => { location.href = `${location.protocol}//${location.hostname}:${r.port}${BASE}/admin/#settings`; }, 1200);
             return;
           }
         }
@@ -2311,8 +2313,8 @@
       const img = h('img', { class: 'cam-live', alt: `${cam.name}, live` });
       const info = h('div', { class: 'row between cam-live-info' });
       const logEl = h('pre', { class: 'logs cam-log' });
-      img.src = `/api/player/camera/${cam.id}?t=${Date.now()}`;
-      img.onerror = () => setTimeout(() => { if (document.body.contains(img)) img.src = `/api/player/camera/${cam.id}?t=${Date.now()}`; }, 3000);
+      img.src = `${BASE}/api/player/camera/${cam.id}?t=${Date.now()}`;
+      img.onerror = () => setTimeout(() => { if (document.body.contains(img)) img.src = `${BASE}/api/player/camera/${cam.id}?t=${Date.now()}`; }, 3000);
       const tick = async () => {
         const all = await GET('/api/cameras').catch(() => null);
         const c = all && all.find((x) => x.id === cam.id);
@@ -2335,7 +2337,7 @@
       const thumb = h('div', { class: 'cam-thumb', onclick: () => preview(c) }, h('span', { class: 'cam-proto' }, c.protocol.toUpperCase()), h('span', { class: 'cam-play' }, icon('play'), 'Live preview'));
       const shot = new Image();
       shot.onload = () => { thumb.style.backgroundImage = `url("${shot.src}")`; thumb.classList.add('has-pic'); };
-      shot.src = `/api/player/camera/${c.id}/snapshot?t=${Date.now()}`;
+      shot.src = `${BASE}/api/player/camera/${c.id}/snapshot?t=${Date.now()}`;
       return h('div', { class: 'card cam-card' }, thumb,
         h('div', { class: 'row between' }, h('b', null, c.name), camState(c.status)),
         h('code', { class: 'cam-addr' }, c.address),
@@ -2773,7 +2775,7 @@
           h('td', null, fmtBytes(set.size)),
           h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
             h('button', { class: 'small', onclick: () => restoreDialog(set) }, 'Restore…'),
-            location === 'local' ? set.files.map((f) => h('a', { class: 'btn small', style: { marginLeft: '4px' }, href: `/api/backups/download/${encodeURIComponent(f.name)}`, title: f.name }, set.files.length > 1 ? `↓ ${f.parts.map((p) => PART_LABELS[p]).join(', ')}` : '↓ Download')) : null,
+            location === 'local' ? set.files.map((f) => h('a', { class: 'btn small', style: { marginLeft: '4px' }, href: `${BASE}/api/backups/download/${encodeURIComponent(f.name)}`, title: f.name }, set.files.length > 1 ? `↓ ${f.parts.map((p) => PART_LABELS[p]).join(', ')}` : '↓ Download')) : null,
             h('button', { class: 'small ghost', onclick: async () => {
               if (!(await confirmBox(`Delete the backup of ${fmtSetDate(set.id)}${location === 'remote' ? ' from the external location' : ''}?`))) return;
               try { await DEL(`/api/backups/${set.id}?location=${location}`); loadList(); } catch (err) { fail(err); }

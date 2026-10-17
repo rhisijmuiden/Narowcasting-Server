@@ -6,12 +6,16 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const store = require('./store');
+const station = require('./station');
 
 const sessions = new Map(); // token -> { userId, expiresAt }
 const pending = new Map(); // login ticket -> { userId, stage: 'verify'|'setup', secret, expiresAt }
 const SESSION_MS = 12 * 60 * 60 * 1000;
 const TICKET_MS = 5 * 60 * 1000;
 const INITIAL_PASSWORD_FILE = path.join(store.DATA_DIR, 'initial-admin-password');
+const COOKIE_PATH = station.BASE_PATH || '/';
+// What a request with the service token (BK_SERVICE_TOKEN) acts as: an admin that is not in the user list.
+const SERVICE_USER = Object.freeze({ id: 'service-token', username: 'service-token', displayName: 'Service token', role: 'admin', authMethod: 'password', mustChangePassword: false });
 
 // Admin can do everything; a user can do what their permissions allow; read only can only look.
 const ROLES = ['admin', 'user', 'readonly'];
@@ -55,6 +59,18 @@ function bootstrap() {
   fs.writeFileSync(INITIAL_PASSWORD_FILE, `${password}\n`, { mode: 0o600 });
   console.log(`Created user "admin" with one-time password: ${password}`);
   console.log(`(also stored in ${INITIAL_PASSWORD_FILE} until it is changed)`);
+}
+
+// Gives the user "admin" a new one-time password that must be changed at the next login (creating the
+// user when it is gone) and returns it. Used by `beeldkrant-station --reset-admin` while the service is stopped.
+function resetAdmin() {
+  const password = randomPassword();
+  let admin = store.list('users').find((u) => u.username === 'admin');
+  if (!admin) admin = store.create('users', { username: 'admin', role: 'admin', authMethod: 'password' });
+  store.update('users', admin.id, { role: 'admin', authMethod: 'password', disabled: false });
+  setPassword(admin.id, password, { mustChange: true });
+  fs.writeFileSync(INITIAL_PASSWORD_FILE, `${password}\n`, { mode: 0o600 });
+  return password;
 }
 
 function permissionsOf(u) {
@@ -247,12 +263,12 @@ function login(res, user) {
   const token = crypto.randomBytes(24).toString('hex');
   sessions.set(token, { userId: user.id, expiresAt: Date.now() + SESSION_MS });
   // Lax so the session cookie also comes along on the redirect back from Microsoft sign-in.
-  res.setHeader('Set-Cookie', `bk_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MS / 1000}`);
+  res.setHeader('Set-Cookie', `bk_session=${token}; HttpOnly; SameSite=Lax; Path=${COOKIE_PATH}; Max-Age=${SESSION_MS / 1000}`);
 }
 
 function logout(req, res) {
   sessions.delete(parseCookies(req).bk_session);
-  res.setHeader('Set-Cookie', 'bk_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
+  res.setHeader('Set-Cookie', `bk_session=; HttpOnly; SameSite=Lax; Path=${COOKIE_PATH}; Max-Age=0`);
 }
 
 // Ends every session of a user (deleted, disabled, or their sign-in changed).
@@ -260,7 +276,19 @@ function endSessions(userId) {
   for (const [token, s] of sessions) if (s.userId === userId) sessions.delete(token);
 }
 
+// With BK_SERVICE_TOKEN set, a request with "Authorization: Bearer <token>" is an admin on /api, without
+// a cookie; a wrong token gets 401. Without a configured token Bearer headers are ignored.
+function serviceToken(req, res, next) {
+  if (!station.SERVICE_TOKEN) return next();
+  const token = station.bearer(req);
+  if (token === null) return next();
+  if (!station.tokenMatches(token)) return res.status(401).json({ error: 'Wrong service token' });
+  req.serviceToken = true;
+  next();
+}
+
 function currentUser(req) {
+  if (req.serviceToken) return SERVICE_USER;
   const token = parseCookies(req).bk_session;
   const s = token && sessions.get(token);
   if (!s) return null;
@@ -301,7 +329,7 @@ function requirePerm(perm) {
 }
 
 module.exports = {
-  ROLES, PERMISSIONS, allPermissions, bootstrap, verify, setPassword, check, hash, publicUser, adminUser, currentUser, login, logout, endSessions,
+  ROLES, PERMISSIONS, allPermissions, bootstrap, resetAdmin, serviceToken, verify, setPassword, check, hash, publicUser, adminUser, currentUser, login, logout, endSessions,
   isAuthenticated, requireAuth, requireRole, requirePerm, can, permissionsOf, policy, policyError, passwordExpired, findByName,
   startLogin, finishLogin, secondStep, newMfaSecret, otpauthUrl, checkTotp, enableMfa, totp,
 };

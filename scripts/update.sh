@@ -52,8 +52,9 @@ finish() {
     die "Installing dependencies failed; Beeldkrant was restarted with the files it has now."
   }
   chown -R "$SERVICE:$SERVICE" "$APP_DIR"
-  # Keep this command and the panel's update service current.
+  # Keep this command, beeldkrant-station and the panel's update service current.
   install -m 0755 "$APP_DIR/scripts/update.sh" /usr/bin/update
+  [[ -f "$APP_DIR/scripts/station.sh" ]] && install -m 0755 "$APP_DIR/scripts/station.sh" /usr/bin/beeldkrant-station
   install_units
 
   info "Starting Beeldkrant"

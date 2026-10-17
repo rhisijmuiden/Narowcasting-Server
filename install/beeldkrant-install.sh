@@ -51,6 +51,8 @@ customize
 
 # Our own `update` command (replaces the generic one customize() writes): updates Beeldkrant in place.
 install -m 0755 /opt/beeldkrant/scripts/update.sh /usr/bin/update
+# `beeldkrant-station`: connects Beeldkrant to Build My TV Station (see the README).
+install -m 0755 /opt/beeldkrant/scripts/station.sh /usr/bin/beeldkrant-station
 # Lets the admin panel start that same update.
 install -m 0644 /opt/beeldkrant/deploy/beeldkrant-update.path /opt/beeldkrant/deploy/beeldkrant-update.service /etc/systemd/system/
 systemctl daemon-reload

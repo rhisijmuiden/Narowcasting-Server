@@ -17,8 +17,12 @@
     });
   }
 
+  // The path the app is served under ('' at the root, e.g. /channel1 behind a station proxy): whatever
+  // comes before /admin/ or /player/ in the address of this page.
+  const base = location.pathname.replace(/\/(admin|player)(\/.*)?$/, '');
+
   async function getJSON(url) {
-    const res = await fetch(url, { cache: 'no-store', credentials: 'same-origin' });
+    const res = await fetch(base + url, { cache: 'no-store', credentials: 'same-origin' });
     if (!res.ok) throw new Error(`${url}: ${res.status}`);
     return res.json();
   }
@@ -493,5 +497,5 @@
     };
   }
 
-  window.Beeldkrant = { renderSlide, renderElement, feedItems, getJSON, sleep, fill };
+  window.Beeldkrant = { base, renderSlide, renderElement, feedItems, getJSON, sleep, fill };
 })();

@@ -9,6 +9,7 @@
 const crypto = require('crypto');
 const store = require('./store');
 const auth = require('./auth');
+const station = require('./station');
 
 // Overridable for testing against a local identity provider.
 const AUTHORITY = (process.env.BK_ENTRA_AUTHORITY || 'https://login.microsoftonline.com').replace(/\/+$/, '');
@@ -48,11 +49,15 @@ async function getJson(url, opts = {}) {
 }
 
 // The address Microsoft sends the user back to; it must be registered in the app registration.
+// Order: a full address under Settings → Application, the public URL of the station (which includes the
+// base path), then the address the browser used (X-Forwarded-* only from trusted proxies when those are set).
 function redirectUri(req) {
   const s = store.getSection('settings') || {};
-  if (s.serverAddress && /^https?:\/\//i.test(s.serverAddress)) return `${s.serverAddress.replace(/\/+$/, '')}/api/sso/callback`;
-  const proto = req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http');
-  return `${proto}://${req.headers['x-forwarded-host'] || req.headers.host}/api/sso/callback`;
+  const base = station.BASE_PATH;
+  if (s.serverAddress && /^https?:\/\//i.test(s.serverAddress)) return `${s.serverAddress.replace(/\/+$/, '')}${base}/api/sso/callback`;
+  if (station.PUBLIC_URL) return `${station.PUBLIC_URL}/api/sso/callback`;
+  const proto = station.forwarded(req, 'x-forwarded-proto') || (req.socket.encrypted ? 'https' : 'http');
+  return `${proto}://${station.forwarded(req, 'x-forwarded-host') || req.headers.host}${base}/api/sso/callback`;
 }
 
 function startUrl(req) {

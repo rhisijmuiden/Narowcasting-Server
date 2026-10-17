@@ -376,6 +376,20 @@ Environment variables:
 | `VAAPI_DEVICE` | `/dev/dri/renderD128` | GPU device for VAAPI |
 | `MAX_UPLOAD_MB` | `2048` | Upload size limit |
 | `BK_INITIAL_PASSWORD` | random | One-time admin password on first start |
+| `BK_BASE_PATH` | none | Serve everything under this path, e.g. `/channel1` (see below) |
+| `BK_SERVICE_TOKEN` | none | Bearer token that is an admin on `/api` (at least 32 characters) |
+| `BK_PUBLIC_URL` | none | Public address including the base path, used for the Microsoft sign-in redirect |
+| `BK_TRUSTED_PROXIES` | none | Comma-separated IPs or CIDRs of the reverse proxy |
+
+## Running as part of Build My TV Station
+
+[Build My TV Station](https://github.com/rhisijmuiden/BulldMyTVStation) can run Beeldkrant as one part of a station, behind its own reverse proxy. For that Beeldkrant follows the [station contract (version 1)](https://github.com/rhisijmuiden/BulldMyTVStation/blob/main/docs/station-contract.md). None of it is on until it is set, so a standalone install works as before.
+
+- `GET /healthz` answers without a login with `{"status":"ok","app":"beeldkrant","version":…,"contract":1}`, at the root and under the base path.
+- `beeldkrant-station [--reset-admin]` (installed by both installers and by `update`) takes `STATION_SERVICE_TOKEN`, `STATION_BASE_PATH`, `STATION_PUBLIC_URL` and `STATION_TRUSTED_PROXIES` from its environment and stores them as the `BK_…` variables above in `/etc/default/beeldkrant` (a variable that is not set stays as it is, an empty one is cleared). It restarts Beeldkrant when something changed, waits for `/healthz`, writes `/var/lib/beeldkrant/station.json` and prints the same JSON; with `--reset-admin` it also gives the user `admin` a new one-time password and adds it as `initialPassword`.
+- With a base path the admin panel, the player, the API, the media, redirects and the session cookie all live under it, and the proxy forwards the full path unchanged (`location /channel1/ { proxy_pass http://10.0.0.21:8080; }`).
+- With the service token, `Authorization: Bearer <token>` is an admin on the API without a cookie; a wrong token gets 401.
+- With trusted proxies set, `X-Forwarded-For`, `-Proto` and `-Host` are only believed from them. Either way, a request with `X-Forwarded-For` never counts as coming from the machine itself, so a proxy on the same host does not open the player data to everyone.
 
 ## Repository layout
 
@@ -385,7 +399,9 @@ install/beeldkrant-install.sh  Runs inside the container
 install/debian.sh              Installer for a Debian 13 machine or VM
 deploy/                        systemd units for Beeldkrant and for updates started from the panel
 scripts/update.sh              The `update` command inside the container
+scripts/station.sh             The `beeldkrant-station` command (Build My TV Station)
 server/                        Node.js server: API, auth, schedule, feeds, stream pipelines, outputs, IP cameras
+test/                          Tests (`npm test`)
 docs/screenshots/              Screenshots used in this README
 public/admin/                  Admin panel (plain JS, no build step)
 public/player/                 Player page and the shared scene renderer

@@ -2,6 +2,16 @@
 
 All notable changes to Beeldkrant. The admin panel shows this file under the Info button.
 
+## 0.8.0 (2026-10-17)
+
+### Added
+- Build My TV Station support (station contract version 1, all optional): `GET /healthz`, a service token for the API (`BK_SERVICE_TOKEN`, sent as `Authorization: Bearer`), serving everything under a base path (`BK_BASE_PATH`, e.g. `/channel1`), a public address for absolute links (`BK_PUBLIC_URL`) and trusted reverse proxies (`BK_TRUSTED_PROXIES`).
+- The `beeldkrant-station` command sets these up, can give the user admin a new one-time password (`--reset-admin`) and writes `/var/lib/beeldkrant/station.json`. Both installers and `update` install it.
+- Tests (`npm test`).
+
+### Fixed
+- A request that came through a reverse proxy on the same machine (it carries `X-Forwarded-For`) no longer counts as coming from the machine itself, so it cannot read the player data without a login.
+
 ## 0.7.1 (2026-10-17)
 
 ### Added

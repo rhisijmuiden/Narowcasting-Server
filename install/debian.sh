@@ -89,6 +89,8 @@ info "Creating service"
 install -m 0644 "$APP_DIR/deploy/beeldkrant.service" /etc/systemd/system/beeldkrant.service
 # The `update` command, and the units that let the admin panel start it.
 install -m 0755 "$APP_DIR/scripts/update.sh" /usr/bin/update
+# `beeldkrant-station`: connects Beeldkrant to Build My TV Station (see the README).
+install -m 0755 "$APP_DIR/scripts/station.sh" /usr/bin/beeldkrant-station
 install -m 0644 "$APP_DIR/deploy/beeldkrant-update.path" "$APP_DIR/deploy/beeldkrant-update.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --quiet --now beeldkrant beeldkrant-update.path
