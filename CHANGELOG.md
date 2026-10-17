@@ -2,6 +2,19 @@
 
 All notable changes to Beeldkrant. The admin panel shows this file under System → Info.
 
+## 0.3.0 (2026-10-17)
+
+### Added
+- Menu in sections: Dashboard (with Statistics), Playouts, Media management, Schedule, Outputs and Settings (Application, Backups), with an Info button at the bottom left.
+- Statistics page with load, CPU, memory, outgoing stream and network traffic in Mbit/s and free disk space, with charts of the last 15 minutes.
+- Media management overview, Video, Audio and Ads views across all folders, and an Ad marker for files.
+- Input streams page for Icecast/Shoutcast streams, with listening, editing and where each stream is used.
+- Settings → Application with the server address and web port.
+- The update asks to make a local backup of the application and database first, optionally with the media.
+
+### Changed
+- Theme and password moved to your account page (click your name at the bottom of the menu).
+
 ## 0.2.0 (2026-10-17)
 
 ### Added

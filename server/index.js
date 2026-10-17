@@ -13,9 +13,12 @@ const schedule = require('./schedule');
 const stream = require('./stream');
 const updater = require('./updater');
 const backup = require('./backup');
+const stats = require('./stats');
+const http = require('http');
 const pkg = require('../package.json');
 
-const PORT = Number(process.env.PORT) || 8080;
+// The port set under Settings → Application wins over the PORT the service starts with.
+const PORT = Number(store.getSection('settings').port) || Number(process.env.PORT) || 8080;
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC = path.join(__dirname, '..', 'public');
 const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 2048;
@@ -287,6 +290,7 @@ app.post('/api/media', upload.array('files', 50), wrap(async (req, res) => {
     }
     created.push(store.create('media', {
       folderId: folderExists(req.query.folderId || null) ? req.query.folderId || null : null,
+      isAd: req.query.ad === '1',
       name: f.originalname, type, mime: f.mimetype, filename: f.filename, size: f.size, thumb,
       duration: type === 'image' ? null : info.duration, width: info.width || null, height: info.height || null, hasAudio: !!info.hasAudio,
     }));
@@ -301,6 +305,12 @@ app.patch('/api/media/:id', (req, res) => {
   if ('folderId' in b) {
     if (!folderExists(b.folderId || null)) return res.status(400).json({ error: 'Folder not found' });
     patch.folderId = b.folderId || null;
+  }
+  if ('isAd' in b) patch.isAd = !!b.isAd;
+  if (b.url !== undefined) {
+    if (!(store.get('media', req.params.id) || {}).external) return res.status(400).json({ error: 'Only an input stream has an address' });
+    if (!/^https?:\/\//i.test(String(b.url))) return res.status(400).json({ error: 'Enter the http(s) address of the stream' });
+    patch.url = String(b.url).trim();
   }
   const m = store.get('media', req.params.id) && store.update('media', req.params.id, Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)));
   if (!m) return res.status(404).json({ error: 'Not found' });
@@ -348,8 +358,25 @@ function clean(body) {
 // Settings and output
 app.get('/api/settings', (req, res) => {
   const { passwordHash, ...rest } = store.getSection('settings');
-  res.json({ ...rest, activePlayoutId: schedule.activePlayoutId() });
+  res.json({ ...rest, port: listenPort, activePlayoutId: schedule.activePlayoutId() });
 });
+// Server address and port (admins only). A new port is opened before the old one closes, so a
+// port that is in use is refused without losing the panel.
+app.put('/api/settings/server', auth.requireRole('admin'), wrap(async (req, res) => {
+  const b = req.body || {};
+  const serverAddress = String(b.serverAddress || '').trim().replace(/\/+$/, '').slice(0, 200);
+  if (serverAddress && !/^[a-z0-9.\-:[\]]+$/i.test(serverAddress.replace(/^https?:\/\//i, ''))) return res.status(400).json({ error: 'Enter a host name or IP address, e.g. 192.168.1.50 or beeldkrant.example.com' });
+  const port = Number(b.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return res.status(400).json({ error: 'Enter a port between 1 and 65535' });
+  const moved = port !== listenPort;
+  if (moved) {
+    try { await openServer(port); } catch (err) {
+      return res.status(400).json({ error: err.code === 'EADDRINUSE' ? `Port ${port} is already in use` : err.code === 'EACCES' ? `Port ${port} needs root; choose a port above 1023` : err.message });
+    }
+  }
+  store.setSection('settings', { serverAddress, port });
+  res.json({ ok: true, port, moved });
+}));
 app.put('/api/settings', (req, res) => {
   const { timezone, locale, panelName } = req.body || {};
   const patch = {};
@@ -401,11 +428,25 @@ app.post('/api/stream/stop', wrap(async (req, res) => { await stream.stop(); res
 app.post('/api/stream/restart', wrap(async (req, res) => { await stream.restart(); res.json(stream.status()); }));
 
 // Software updates (admins only)
-app.get('/api/system/update', wrap(async (req, res) => res.json(await updater.status())));
+app.get('/api/system/update', wrap(async (req, res) => res.json({ ...(await updater.status()), prepare })));
 app.post('/api/system/update/check', auth.requireRole('admin'), wrap(async (req, res) => res.json(await updater.check())));
+// An update can first make a local backup of the application and database (and optionally the
+// media); `prepare` reports on that step until the update itself is requested.
+let prepare = null;
 app.post('/api/system/update', auth.requireRole('admin'), wrap(async (req, res) => {
-  updater.requestUpdate();
-  res.json(await updater.status());
+  const b = req.body || {};
+  if (!(await updater.status()).canUpdate) updater.requestUpdate(); // throws with the reason
+  if (b.backup) {
+    prepare = { state: 'backup' };
+    backup.runBackup({ parts: ['app', 'database', ...(b.media ? ['media'] : [])], localOnly: true }, (err) => {
+      if (err) { prepare = { state: 'failed', message: `The backup failed (${err.message}), so the update was not started.` }; return; }
+      try { updater.requestUpdate(); prepare = null; } catch (e) { prepare = { state: 'failed', message: e.message }; }
+    });
+  } else {
+    prepare = null;
+    updater.requestUpdate();
+  }
+  res.json({ ...(await updater.status()), prepare });
 }));
 
 // System info (admins only): build, changelog and the machine it runs on.
@@ -491,10 +532,37 @@ app.use((err, req, res, next) => {
   res.status(err.status || 400).json({ error: err.message || 'Something went wrong' });
 });
 
-app.listen(PORT, HOST, () => {
-  console.log(`Beeldkrant ${pkg.version} admin panel on http://${HOST}:${PORT}/admin/`);
+// ---------- listening ----------
+let server = null;
+let listenPort = null;
+// Listens on `port`; when already listening elsewhere, the old port closes once the new one is open.
+function openServer(port) {
+  return new Promise((resolve, reject) => {
+    const next = http.createServer(app);
+    next.once('error', reject);
+    next.listen(port, HOST, () => {
+      next.removeListener('error', reject);
+      const old = server;
+      server = next;
+      listenPort = port;
+      stream.port = port;
+      console.log(`Beeldkrant ${pkg.version} admin panel on http://${HOST}:${port}/admin/`);
+      if (old) {
+        // Give the browser that asked for the change its answer before closing the old port.
+        setTimeout(() => { old.close(); if (old.closeAllConnections) old.closeAllConnections(); }, 1500);
+        if (stream.wanted) stream.restart().catch((err) => console.error('Could not restart the stream on the new port:', err.message));
+      }
+      resolve(next);
+    });
+  });
+}
+
+app.get('/api/stats', (req, res) => res.json(stats.current()));
+
+openServer(PORT).catch((err) => { console.error(`Cannot listen on port ${PORT}:`, err.message); process.exit(1); }).then(() => {
   updater.start();
   backup.start();
+  stats.start(stream);
   if (store.getSection('output').enabled) {
     stream.start().catch((err) => console.error('Could not resume stream:', err.message));
   }
