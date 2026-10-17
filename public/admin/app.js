@@ -212,10 +212,10 @@
     return input;
   }
 
-  function modal(title, body, actions) {
+  function modal(title, body, actions, opts = {}) {
     const back = h('div', { class: 'modal-back', onclick: (e) => { if (e.target === back) close(); } });
-    const close = () => back.remove();
-    back.appendChild(h('div', { class: 'modal' }, h('h2', null, title), body, h('div', { class: 'row', style: { justifyContent: 'flex-end', marginTop: '16px' } }, actions(close))));
+    const close = () => { back.remove(); if (opts.onClose) opts.onClose(); };
+    back.appendChild(h('div', { class: `modal ${opts.wide ? 'wide' : ''}` }, h('h2', null, title), body, h('div', { class: 'row', style: { justifyContent: 'flex-end', marginTop: '16px' } }, actions(close))));
     document.body.appendChild(back);
     return close;
   }
@@ -346,6 +346,7 @@
       ['media', 'Media folders', [['media/video', 'Video'], ['media/audio', 'Audio'], ['media/ads', 'Ads']]],
       ['feeds', 'RSS feeds'],
       ['streams', 'Input streams'],
+      ['cameras', 'IP cameras'],
     ], { dropdown: true }],
     '-',
     ['schedule', 'Schedule'],
@@ -411,7 +412,7 @@
       main));
     if (me.user.role === 'admin' && page !== 'info') updateBanner(main);
     const pages = {
-      dashboard: pageDashboard, stats: pageStats, playouts: pagePlayouts, library: pageLibrary, media: pageMedia, feeds: pageFeeds, streams: pageStreams,
+      dashboard: pageDashboard, stats: pageStats, playouts: pagePlayouts, library: pageLibrary, media: pageMedia, feeds: pageFeeds, streams: pageStreams, cameras: pageCameras,
       schedule: pageSchedule, output: pageOutput, routing: pageRouting, settings: pageSettings, backups: pageBackups, info: pageInfo, account: pageAccount,
     };
     try { await (pages[page] || pageDashboard)(main, arg); } catch (err) { fail(err); }
@@ -598,6 +599,7 @@
     ticker: '<rect x="2" y="8" width="20" height="8" rx="2"/><path d="M6 12h8M17 12h1"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     weather: '<path d="M12 3v2M5.6 5.6l1.4 1.4M3 12h2M18.4 5.6 17 7"/><path d="M8.5 11a3.5 3.5 0 0 1 6.8-1"/><path d="M17 20H8a3.5 3.5 0 1 1 .9-6.9A5 5 0 0 1 18 14a3 3 0 0 1-1 6z"/>',
+    camera: '<path d="M3 7h3l2-3h8l2 3h3v13H3z"/><circle cx="12" cy="13" r="4"/>',
     webpage: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
     box: '<rect x="4" y="4" width="16" height="16" rx="3"/>',
     plus: 'M12 5v14M5 12h14',
@@ -640,11 +642,12 @@
     ticker: { label: 'Ticker', w: 1920, h: 80, defaults: { source: 'text', text: 'Breaking news\nMore headlines here', fontSize: 40, speed: 150, background: '#c8102e', color: '#ffffff', label: 'News' } },
     clock: { label: 'Clock', w: 300, h: 110, defaults: { mode: 'time', fontSize: 72, color: '#ffffff' } },
     weather: { label: 'Weather', w: 520, h: 360, defaults: { lat: 52.37, lon: 4.9, label: 'Amsterdam', fontSize: 56, color: '#ffffff' } },
+    camera: { label: 'IP camera', w: 960, h: 540, defaults: { cameraId: null, fit: 'cover' } },
     webpage: { label: 'Web page', w: 1280, h: 720, defaults: { url: 'https://', zoom: 100 } },
     box: { label: 'Box', w: 600, h: 300, defaults: { background: 'rgba(0,0,0,0.5)', radius: 16 } },
   };
   // How the "Add" toolbar of the editor groups the element types.
-  const TOOL_GROUPS = [['Text and info', ['text', 'ticker', 'clock', 'weather', 'rss']], ['Media', ['image', 'video', 'slideshow', 'playlist']], ['Other', ['box', 'webpage']]];
+  const TOOL_GROUPS = [['Text and info', ['text', 'ticker', 'clock', 'weather', 'rss']], ['Media', ['image', 'video', 'slideshow', 'playlist', 'camera']], ['Other', ['box', 'webpage']]];
   const TRANSITIONS = ['fade', 'crossfade', 'cut', 'slide-left', 'slide-right', 'slide-up', 'slide-down', 'zoom', 'wipe', 'wipe-down', 'circle', 'blur'];
   const DAY_LABELS = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
 
@@ -663,11 +666,12 @@
     let playout;
     let media;
     let feeds;
+    let cams = [];
     let allPlayouts;
     let region;
     let folders;
     try {
-      [playout, media, feeds, allPlayouts, region, folders] = await Promise.all([GET(`/api/playouts/${id}`), GET('/api/media'), GET('/api/feeds'), GET('/api/playouts'), GET('/api/settings'), GET('/api/folders')]);
+      [playout, media, feeds, allPlayouts, region, folders] = await Promise.all([GET(`/api/playouts/${id}`), GET('/api/media'), GET('/api/feeds'), GET('/api/playouts'), GET('/api/settings'), GET('/api/folders'), GET('/api/cameras').then((c) => { cams = c; })]);
     } catch (err) { fail(err); location.hash = 'playouts'; return; }
     playout.slides = playout.slides || [];
     playout.overlays = playout.overlays || [];
@@ -817,7 +821,8 @@
       const m = e.mediaId && mediaById[e.mediaId];
       const feed = e.feedId && feeds.find((f) => f.id === e.feedId);
       const detail = e.type === 'text' ? String(e.text || '').split('\n')[0] : m ? m.name : e.type === 'image' && e.source === 'feed' ? 'feed image'
-        : e.items ? `${e.items.length} item${e.items.length === 1 ? '' : 's'}` : e.type === 'rss' && feed ? feed.name : '';
+        : e.items ? `${e.items.length} item${e.items.length === 1 ? '' : 's'}` : e.type === 'rss' && feed ? feed.name
+          : e.type === 'camera' ? ((cams.find((c) => c.id === e.cameraId) || {}).name || '') : '';
       return detail ? `${label}: ${detail.slice(0, 24)}` : label;
     }
 
@@ -881,6 +886,8 @@
       const m = e.mediaId && mediaById[e.mediaId];
       const out = m ? { ...e, src: m.url, mediaType: m.type } : { ...e };
       if (Array.isArray(e.items)) out.sources = e.items.map((id) => mediaById[id]).filter(Boolean).map((x) => ({ id: x.id, src: x.url, type: x.type }));
+      const cam = e.type === 'camera' && cams.find((c) => c.id === e.cameraId);
+      if (cam) Object.assign(out, { src: `/api/player/camera/${cam.id}`, snapshot: `/api/player/camera/${cam.id}/snapshot`, cameraName: cam.name });
       if (e.enabled === false) out.opacity = 25; // hidden on air: faint in the editor
       return out;
     };
@@ -1269,6 +1276,12 @@
             field('Background', bind(e, 'background', changed, 'color')),
             h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: e.forecast !== false, onchange: (ev) => { e.forecast = ev.target.checked; changed(); } }), '3-day forecast')),
           h('p', { class: 'hint' }, 'Weather data from Open-Meteo, refreshed every 15 minutes.'));
+          break;
+        case 'camera':
+          out.push(h('div', { class: 'fields' },
+            field('Camera', bind(e, 'cameraId', rerender, 'select', { options: [['', '— choose a camera —'], ...cams.map((c) => [c.id, `${c.name} (${c.protocol.toUpperCase()})`])] }), { wide: true }),
+            field('Fit', bind(e, 'fit', changed, 'select', { options: [['cover', 'Fill (crop)'], ['contain', 'Fit (letterbox)'], ['fill', 'Stretch']] }))),
+          h('p', { class: 'hint' }, cams.length ? 'Shows the camera live on air; the editor shows one picture. Add cameras under Media management → IP cameras.' : 'No cameras yet: add them under Media management → IP cameras.'));
           break;
         case 'webpage':
           out.push(h('div', { class: 'fields' },
@@ -2089,7 +2102,7 @@
 
   // ---------- media management: overview ----------
   async function pageLibrary(main) {
-    const [all, folders, feeds, playouts] = await Promise.all([GET('/api/media'), GET('/api/folders'), GET('/api/feeds'), GET('/api/playouts')]);
+    const [all, folders, feeds, playouts, cams] = await Promise.all([GET('/api/media'), GET('/api/folders'), GET('/api/feeds'), GET('/api/playouts'), GET('/api/cameras')]);
     const files = all.filter((m) => !m.external);
     const streams = all.filter((m) => m.external);
     const size = (list) => fmtBytes(list.reduce((a, m) => a + (m.size || 0), 0));
@@ -2108,7 +2121,8 @@
         card('#media/audio', 'Audio', String(files.filter((m) => m.type === 'audio').length), size(files.filter((m) => m.type === 'audio'))),
         card('#media/ads', 'Ads', String(files.filter((m) => m.isAd).length), 'Files marked as ads (commercials)'),
         card('#feeds', 'RSS feeds', String(feeds.length), null, feeds.map((f) => f.name)),
-        card('#streams', 'Input streams', String(streams.length), 'Icecast / Shoutcast audio', streams.map((m) => (musicUse(m.id).length ? `${m.name} (music in ${musicUse(m.id).join(', ')})` : m.name)))));
+        card('#streams', 'Input streams', String(streams.length), 'Icecast / Shoutcast audio', streams.map((m) => (musicUse(m.id).length ? `${m.name} (music in ${musicUse(m.id).join(', ')})` : m.name))),
+        card('#cameras', 'IP cameras', String(cams.length), 'RTSP, RTMP(S) and RTP', cams.map((c) => `${c.name} (${c.protocol.toUpperCase()})`))));
   }
 
   // ---------- media management: input streams ----------
@@ -2150,6 +2164,137 @@
               h('button', { class: 'small ghost', onclick: async () => { if (await confirmBox(`Delete "${m.name}"?${used.length ? ' Playouts that use it lose their background music.' : ''}`)) { await DEL(`/api/media/${m.id}`).catch(fail); route(); } } }, 'Delete')));
         }))))
         : h('p', { class: 'muted' }, 'No input streams yet. Add a Shoutcast or Icecast stream to use as background music.'));
+  }
+
+  // ---------- media management: IP cameras ----------
+  const CAMERA_PROTOCOLS = [['rtsp', 'RTSP'], ['rtmp', 'RTMP'], ['rtmps', 'RTMPS'], ['rtp', 'RTP']];
+  const CAMERA_HINTS = {
+    rtsp: ['rtsp://192.168.1.20:554/stream1', 'Most IP cameras. The path differs per make; see the camera manual (e.g. /stream1, /h264, /cam/realmonitor).'],
+    rtmp: ['rtmp://192.168.1.20:1935/live/camera1', 'A camera or media server that offers its stream over RTMP.'],
+    rtmps: ['rtmps://cam.example.com:443/live/camera1', 'RTMP over TLS. Tick "Ignore SSL errors" for a camera with a self-signed certificate.'],
+    rtp: ['rtp://0.0.0.0:5004', 'Beeldkrant listens on this UDP port (use a multicast address such as rtp://239.0.0.1:5004 to join a group). MPEG-TS over RTP works as is; for other RTP streams paste the SDP description.'],
+  };
+  const camState = (st) => {
+    if (st.state === 'live') return h('span', { class: 'badge ok' }, `Live · ${st.width}×${st.height} · ${st.fps} fps`);
+    if (st.state === 'connecting') return h('span', { class: 'badge' }, 'Connecting…');
+    if (st.state === 'error') return h('span', { class: 'badge err', title: st.error || '' }, 'Error');
+    return h('span', { class: 'badge' }, 'Idle');
+  };
+  const camResult = (res) => (res.ok
+    ? h('div', { class: 'cam-result ok' }, h('b', null, 'Connected'), h('span', null, `${res.summary}${res.ms ? ` · answered in ${(res.ms / 1000).toFixed(1)} s` : ''}`))
+    : h('div', { class: 'cam-result err' }, h('b', null, 'Could not connect'), h('span', null, res.error)));
+
+  async function pageCameras(main) {
+    let cams = await GET('/api/cameras');
+    const playouts = await GET('/api/playouts');
+    const usedIn = (id) => playouts.filter((p) => [...(p.overlays || []), ...(p.slides || []).flatMap((s) => s.elements || [])].some((e) => e.type === 'camera' && e.cameraId === id)).map((p) => p.name);
+    const listEl = h('div');
+
+    const edit = (cam) => {
+      const data = cam ? { ...clone(cam), password: '' } : { name: '', protocol: 'rtsp', url: '', username: '', password: '', transport: 'tcp', ignoreSsl: false, sdp: '', fps: 25, maxWidth: 1920 };
+      const result = h('div');
+      const body = h('div', { class: 'stack' });
+      const draw = () => {
+        const [placeholder, hint] = CAMERA_HINTS[data.protocol];
+        put(body,
+          h('div', { class: 'fields' },
+            field('Name', bind(data, 'name', () => {}, 'text', { placeholder: 'e.g. Main entrance' }), { wide: true }),
+            field('Protocol', h('div', { class: 'seg seg-wide' }, CAMERA_PROTOCOLS.map(([v, label]) => h('button', {
+              type: 'button', class: data.protocol === v ? 'active' : '',
+              onclick: () => {
+                // Swap the scheme of an address that was typed for another protocol.
+                if (data.url) data.url = data.url.replace(/^[a-z]+:\/\//i, `${v}://`);
+                data.protocol = v; put(result); draw();
+              },
+            }, label))), { wide: true }),
+            field('Address', bind(data, 'url', () => {}, 'text', { placeholder }), { wide: true, hint }),
+            data.protocol === 'rtp' ? null : field('User name', bind(data, 'username', () => {}, 'text', { placeholder: 'optional' })),
+            data.protocol === 'rtp' ? null : field('Password', bind(data, 'password', () => {}, 'password', { placeholder: cam && cam.hasPassword ? '•••••• (unchanged)' : 'optional' })),
+            data.protocol === 'rtsp' ? field('Transport', bind(data, 'transport', () => {}, 'select', { options: [['tcp', 'TCP (most reliable)'], ['udp', 'UDP']] })) : null,
+            data.protocol === 'rtmps' ? h('label', { class: 'check wide cam-ssl' }, bind(data, 'ignoreSsl', () => {}, 'checkbox'), 'Ignore SSL errors (self-signed or expired certificate, or a name that does not match)') : null,
+            data.protocol === 'rtp' ? field('SDP description (optional)', h('textarea', { rows: 6, class: 'mono', placeholder: 'v=0\no=- 0 0 IN IP4 192.168.1.20\ns=Camera\nc=IN IP4 0.0.0.0\nt=0 0\nm=video 5004 RTP/AVP 96\na=rtpmap:96 H264/90000', oninput: (ev) => { data.sdp = ev.target.value; } }, data.sdp || ''), { wide: true, hint: 'Needed for H.264/H.265 over RTP; not needed for MPEG-TS over RTP.' }) : null,
+            field('Frame rate on air', bind(data, 'fps', () => {}, 'number', { min: 1, max: 60 }), { hint: 'Pictures per second in scenes and the preview' }),
+            field('Maximum width', bind(data, 'maxWidth', () => {}, 'number', { min: 160, max: 3840, step: 10 }), { hint: 'Larger pictures are scaled down' })),
+          result);
+      };
+      draw();
+      const test = async (btn) => {
+        btn.disabled = true;
+        put(result, h('div', { class: 'cam-result' }, h('b', null, 'Testing…'), h('span', null, 'Connecting to the camera')));
+        try { put(result, camResult(await POST('/api/cameras/test', { ...data, id: cam ? cam.id : undefined, changed: true }))); } catch (err) { put(result, camResult({ ok: false, error: err.message })); }
+        btn.disabled = false;
+      };
+      modal(cam ? 'Edit IP camera' : 'Add IP camera', body, (close) => {
+        const testBtn = h('button', { onclick: () => test(testBtn) }, 'Test connection');
+        return [testBtn, h('button', { onclick: close }, 'Cancel'), h('button', { class: 'primary', onclick: async () => {
+          try {
+            if (cam) await PUT(`/api/cameras/${cam.id}`, data); else await POST('/api/cameras', data);
+            close(); route();
+          } catch (err) { fail(err); }
+        } }, cam ? 'Save' : 'Add camera')];
+      });
+    };
+
+    const preview = (cam) => {
+      const img = h('img', { class: 'cam-live', alt: `${cam.name}, live` });
+      const info = h('div', { class: 'row between cam-live-info' });
+      const logEl = h('pre', { class: 'logs cam-log' });
+      img.src = `/api/player/camera/${cam.id}?t=${Date.now()}`;
+      img.onerror = () => setTimeout(() => { if (document.body.contains(img)) img.src = `/api/player/camera/${cam.id}?t=${Date.now()}`; }, 3000);
+      const tick = async () => {
+        const all = await GET('/api/cameras').catch(() => null);
+        const c = all && all.find((x) => x.id === cam.id);
+        if (!c || !document.body.contains(img)) return;
+        put(info, camState(c.status), h('span', { class: 'muted' }, c.address));
+        put(logEl, (c.status.log || []).slice(-6).join('\n') || 'Nothing logged yet.');
+        if (c.status.state === 'error' && c.status.error) info.append(h('div', { class: 'cam-result err wide' }, h('span', null, c.status.error)));
+      };
+      tick();
+      const iv = setInterval(tick, 1000);
+      const stop = () => { clearInterval(iv); img.removeAttribute('src'); };
+      modal(`${cam.name}: live preview`, h('div', { class: 'stack' }, h('div', { class: 'cam-frame' }, img), info, logEl), (close) => [
+        h('button', { onclick: async () => { const r = await POST('/api/cameras/test', { ...cam, id: cam.id }); toast(r.ok ? `Connected · ${r.summary}` : r.error, r.ok ? 'ok' : 'err'); } }, 'Test connection'),
+        h('button', { class: 'primary', onclick: () => { stop(); close(); } }, 'Close'),
+      ], { wide: true, onClose: stop });
+    };
+
+    const draw = () => put(listEl, cams.length ? h('div', { class: 'cam-grid' }, cams.map((c) => {
+      const used = usedIn(c.id);
+      const thumb = h('div', { class: 'cam-thumb', onclick: () => preview(c) }, h('span', { class: 'cam-proto' }, c.protocol.toUpperCase()), h('span', { class: 'cam-play' }, icon('play'), 'Live preview'));
+      const shot = new Image();
+      shot.onload = () => { thumb.style.backgroundImage = `url("${shot.src}")`; thumb.classList.add('has-pic'); };
+      shot.src = `/api/player/camera/${c.id}/snapshot?t=${Date.now()}`;
+      return h('div', { class: 'card cam-card' }, thumb,
+        h('div', { class: 'row between' }, h('b', null, c.name), camState(c.status)),
+        h('code', { class: 'cam-addr' }, c.address),
+        h('div', { class: 'hint' }, [c.protocol === 'rtsp' ? `RTSP over ${(c.transport || 'tcp').toUpperCase()}` : null, c.protocol === 'rtmps' && c.ignoreSsl ? 'SSL errors ignored' : null, c.protocol === 'rtp' && c.sdp ? 'with SDP' : null, c.hasPassword ? 'with password' : null, used.length ? `In ${used.join(', ')}` : 'Not used in a playout'].filter(Boolean).join(' · ')),
+        h('div', { class: 'row', style: { gap: '6px', marginTop: '4px' } },
+          h('button', { class: 'small', onclick: () => preview(c) }, 'Preview'),
+          h('button', { class: 'small', onclick: async (ev) => {
+            const b = ev.target; b.disabled = true; b.textContent = 'Testing…';
+            const r = await POST('/api/cameras/test', { ...c, id: c.id }).catch((err) => ({ ok: false, error: err.message }));
+            toast(r.ok ? `${c.name}: connected · ${r.summary}` : `${c.name}: ${r.error}`, r.ok ? 'ok' : 'err');
+            b.disabled = false; b.textContent = 'Test';
+          } }, 'Test'),
+          h('button', { class: 'small', onclick: () => edit(c) }, 'Edit'),
+          h('button', { class: 'small ghost', onclick: async () => { if (await confirmBox(`Delete camera "${c.name}"?${used.length ? ' Scenes that show it go black.' : ''}`)) { await DEL(`/api/cameras/${c.id}`).catch(fail); route(); } } }, 'Delete')));
+    })) : h('div', { class: 'card' }, h('p', { class: 'muted' }, 'No cameras yet. Add an RTSP, RTMP, RTMPS or RTP camera, test the connection and show it live in a scene with the IP camera element.')));
+
+    main.append(h('div', { class: 'row between' }, h('h1', null, 'IP cameras'), h('button', { class: 'primary', onclick: () => edit(null) }, '+ Add camera')),
+      h('p', { class: 'muted' }, 'Live cameras for your scenes. A camera only connects while someone watches it: a preview here, or a scene on air with the IP camera element.'),
+      listEl);
+    draw();
+    // Keep the states fresh.
+    const iv = setInterval(async () => {
+      const next = await GET('/api/cameras').catch(() => null);
+      if (!next) return;
+      for (const c of next) {
+        const card = [...listEl.querySelectorAll('.cam-card')][cams.findIndex((x) => x.id === c.id)];
+        const badgeEl = card && card.querySelector('.row.between .badge');
+        if (badgeEl) badgeEl.replaceWith(camState(c.status));
+      }
+    }, 3000);
+    cleanup = () => clearInterval(iv);
   }
 
   // ---------- account ----------

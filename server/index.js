@@ -16,6 +16,7 @@ const backup = require('./backup');
 const stats = require('./stats');
 const outputs = require('./outputs');
 const providers = require('./providers');
+const cameras = require('./cameras');
 const http = require('http');
 const pkg = require('../package.json');
 
@@ -129,6 +130,12 @@ function resolveElement(e) {
   if (Array.isArray(e.items)) {
     out.sources = e.items.map((id) => store.get('media', id)).filter(Boolean).map((m) => ({ id: m.id, src: mediaUrl(m), type: m.type }));
   }
+  if (e.type === 'camera' && e.cameraId) {
+    const cam = store.get('cameras', e.cameraId);
+    out.cameraName = cam ? cam.name : null;
+    out.src = cam ? `/api/player/camera/${cam.id}` : null;
+    out.snapshot = cam ? `/api/player/camera/${cam.id}/snapshot` : null;
+  }
   return out;
 }
 
@@ -206,6 +213,19 @@ app.get('/api/player/events', playerAccess, (req, res) => {
   const ping = setInterval(() => res.write(': ping\n\n'), 25000);
   req.on('close', () => { clearInterval(ping); listeners.delete(res); });
 });
+
+// IP cameras as MJPEG for camera elements and the preview, and as a single picture.
+app.get('/api/player/camera/:id', playerAccess, (req, res) => {
+  if (!store.get('cameras', req.params.id)) return res.status(404).json({ error: 'Camera not found' });
+  cameras.watch(req.params.id, req, res);
+});
+app.get('/api/player/camera/:id/snapshot', playerAccess, wrap(async (req, res) => {
+  if (!store.get('cameras', req.params.id)) return res.status(404).json({ error: 'Camera not found' });
+  try {
+    const jpeg = await cameras.snapshot(req.params.id);
+    res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' }).send(jpeg);
+  } catch (err) { res.status(504).json({ error: err.message }); }
+}));
 
 app.use('/media', playerAccess, express.static(store.MEDIA_DIR, { maxAge: '1h', fallthrough: false }));
 app.use('/player', express.static(path.join(PUBLIC, 'player')));
@@ -517,6 +537,55 @@ app.delete('/api/outputs/:id', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// IP cameras. The password never goes back to the browser; an empty one keeps the saved one.
+function publicCamera(c) {
+  const { password, ...rest } = c;
+  return { ...rest, hasPassword: !!password, address: cameras.redact(cameras.address({ ...c, password: password ? 'x' : '' })), status: cameras.status(c.id) };
+}
+function cleanCamera(b, existing = {}) {
+  const c = {
+    name: String(b.name || '').trim().slice(0, 80) || 'Camera',
+    protocol: String(b.protocol || 'rtsp').toLowerCase(),
+    url: String(b.url || '').trim().slice(0, 1000),
+    username: String(b.username || '').trim().slice(0, 200),
+    password: b.password ? String(b.password).slice(0, 200) : b.clearPassword ? '' : existing.password || '',
+    transport: b.transport === 'udp' ? 'udp' : 'tcp',
+    ignoreSsl: !!b.ignoreSsl,
+    sdp: String(b.sdp || '').slice(0, 20000),
+    fps: Math.min(Math.max(Number(b.fps) || 25, 1), 60),
+    maxWidth: Math.min(Math.max(Number(b.maxWidth) || 1920, 160), 3840),
+  };
+  cameras.check(c);
+  return c;
+}
+app.get('/api/cameras', (req, res) => res.json(store.list('cameras').map(publicCamera)));
+app.post('/api/cameras/test', wrap(async (req, res) => {
+  const b = req.body || {};
+  const existing = (b.id && store.get('cameras', b.id)) || {};
+  let cam;
+  try { cam = { ...cleanCamera(b, existing), id: existing.id }; } catch (err) { return res.status(400).json({ ok: false, error: err.message }); }
+  // A camera that is already being watched answers from its running stream (an RTP port can only be opened once).
+  const live = existing.id && cameras.status(existing.id);
+  if (live && live.state === 'live' && !b.changed) return res.json({ ok: true, summary: `Live: ${live.width}×${live.height} at ${live.fps} fps (already open)` });
+  try { res.json({ ok: true, ...(await cameras.test(cam)) }); } catch (err) { res.json({ ok: false, error: err.message }); }
+}));
+app.post('/api/cameras', (req, res) => {
+  try { res.json(publicCamera(store.create('cameras', cleanCamera(req.body || {})))); } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.put('/api/cameras/:id', (req, res) => {
+  const existing = store.get('cameras', req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+  try {
+    const c = store.update('cameras', existing.id, cleanCamera(req.body || {}, existing));
+    cameras.changed(c.id);
+    res.json(publicCamera(c));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.delete('/api/cameras/:id', (req, res) => {
+  cameras.remove(req.params.id);
+  store.remove('cameras', req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' });
+});
+
 // Linked accounts and the API credentials to link them (admins only).
 const adminOnly = auth.requireRole('admin');
 app.get('/api/connections', adminOnly, (req, res) => {
@@ -700,6 +769,7 @@ openServer(PORT).catch((err) => { console.error(`Cannot listen on port ${PORT}:`
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, async () => {
     stream.wanted = false;
+    cameras.stopAll();
     await outputs.stopAll();
     await Promise.all(Object.values(stream.pipelines).map((p) => { p.wanted = false; return p.killAll(); }));
     process.exit(0);

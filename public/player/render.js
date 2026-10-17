@@ -309,6 +309,37 @@
       return { node: b, done };
     },
 
+    // IP camera: a live MJPEG picture from the server, which reconnects by itself.
+    camera(e, ctx) {
+      const b = box(e);
+      b.style.background = '#000';
+      if (!e.src) {
+        if (ctx.editor) b.appendChild(el('div', 'placeholder', 'Choose a camera'));
+        return { node: b };
+      }
+      const img = el('img', `fill fit-${e.fit || 'cover'}`);
+      img.alt = '';
+      b.appendChild(img);
+      if (ctx.editor) {
+        // The editor shows one picture rather than keeping a live connection per redraw.
+        const wait = el('div', 'placeholder', ctx.thumb ? '' : `Connecting to ${e.cameraName || 'the camera'}…`);
+        b.prepend(wait);
+        img.onload = () => wait.remove();
+        img.onerror = () => { img.remove(); wait.textContent = `${e.cameraName || 'Camera'}: no picture`; };
+        img.src = `${e.snapshot}?t=${Date.now()}`;
+        if (!ctx.thumb) b.appendChild(badge(`Live camera · ${e.cameraName || ''}`));
+        return { node: b };
+      }
+      let on = false;
+      let retry;
+      const connect = () => { if (on) img.src = `${e.src}?t=${Date.now()}`; };
+      img.onerror = () => { clearTimeout(retry); retry = setTimeout(connect, 3000); };
+      ctx.onShow.push(() => { on = true; connect(); });
+      ctx.onHide.push(() => { on = false; clearTimeout(retry); img.removeAttribute('src'); });
+      if (ctx.signal) ctx.signal.addEventListener('abort', () => { on = false; clearTimeout(retry); img.removeAttribute('src'); }, { once: true });
+      return { node: b };
+    },
+
     webpage(e, ctx) {
       const b = box(e);
       if (!e.url) { if (ctx.editor) b.appendChild(el('div', 'placeholder', 'No URL set')); return { node: b }; }

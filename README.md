@@ -111,7 +111,7 @@ The dashboard shows what is on air: the playout, any playouts routed to their ow
 
 ### The scene editor
 
-The top bar switches between *Scenes*, *Overlays* and *Playout settings*, and holds *Preview*, *Clone* and *Save* (or Ctrl+S); "Unsaved changes" shows until you save. Add elements with the buttons above the canvas, grouped in *Text and info* (text, ticker, clock, weather, RSS feed), *Media* (image, video, photo carousel, video carousel) and *Other* (box, web page). The scene list shows a thumbnail of every scene with a switch to turn it off; the layer list shows the elements of the scene, with an eye to hide one and a lock to stop it moving.
+The top bar switches between *Scenes*, *Overlays* and *Playout settings*, and holds *Preview*, *Clone* and *Save* (or Ctrl+S); "Unsaved changes" shows until you save. Add elements with the buttons above the canvas, grouped in *Text and info* (text, ticker, clock, weather, RSS feed), *Media* (image, video, photo carousel, video carousel, IP camera) and *Other* (box, web page). The scene list shows a thumbnail of every scene with a switch to turn it off; the layer list shows the elements of the scene, with an eye to hide one and a lock to stop it moving.
 
 **Photo carousel** shows several photos in one place, one after another. Choose the time per photo, the transition (fade, slide left, slide up, zoom or cut) and the order: *In this order* or *Random*. *Add photos* opens the media folders, where you tick several photos at once; change the order by dragging the rows or with the arrows. **Video carousel** does the same with videos: they play back to back in your order or at random, with or without sound, and the editor shows their total length.
 
@@ -145,6 +145,7 @@ The top bar switches between *Scenes*, *Overlays* and *Playout settings*, and ho
 | Audio | mp3, m4a, aac, ogg, wav, flac |
 | Input streams | Shoutcast/Icecast audio streams (Media management → *Input streams*) |
 | RSS / Atom | Media management → *RSS feeds* |
+| IP cameras | RTSP, RTMP, RTMPS and RTP (Media management → *IP cameras*) |
 
 *Media management* opens with an overview of everything you have: files and folders, video, audio, ads, RSS feeds and input streams. Keep media tidy in **folders**: create folders (and subfolders) under *Media folders*, upload straight into the folder you have open, and move files by dragging them onto a folder or a breadcrumb, or with *Move*. Deleting a folder keeps its files: they move up one level. The media pickers in the scene editor browse the same folders and can search all of them. *Video*, *Audio* and *Ads* list those files across all folders. Mark a file as an ad (commercial) with its *Ad* button, or upload under *Ads* to mark new files straight away.
 
@@ -171,6 +172,38 @@ The top bar switches between *Scenes*, *Overlays* and *Playout settings*, and ho
 </p>
 <p>
   <img src="docs/screenshots/input-streams.png" alt="Icecast/Shoutcast input streams" width="49%">
+</p>
+
+### IP cameras
+
+*IP cameras* holds live cameras for your scenes. Add one with its protocol and address:
+
+| Protocol | Address | Options |
+| --- | --- | --- |
+| RTSP | `rtsp://192.168.1.20:554/stream1` (the path differs per make) | user name and password, TCP or UDP |
+| RTMP | `rtmp://192.168.1.20:1935/live/camera1` | user name and password |
+| RTMPS | `rtmps://cam.example.com:443/live/camera1` | **Ignore SSL errors** for a self-signed or expired certificate |
+| RTP | `rtp://0.0.0.0:5004` (or a multicast address such as `rtp://239.0.0.1:5004`) | SDP description for H.264/H.265 over RTP; MPEG-TS over RTP needs none |
+
+**Test connection** connects once and shows what the camera sends (codec, resolution, frame rate, audio) or why it fails: connection refused, wrong user name or password, unknown path, an SSL error, or no answer. **Preview** shows the camera live with its state, frame rate and log. A camera only connects while someone watches it (a preview, or a scene on air) and reconnects by itself when it drops.
+
+<p>
+  <img src="docs/screenshots/cameras.png" alt="IP cameras: RTSP, RTMP, RTMPS and RTP cameras with their live state" width="49%">
+  <img src="docs/screenshots/camera-preview.png" alt="Live preview of a camera with its frame rate and log" width="49%">
+</p>
+<p>
+  <img src="docs/screenshots/camera-add-ssl-error.png" alt="Testing an RTMPS camera with a self-signed certificate: SSL error" width="49%">
+  <img src="docs/screenshots/camera-add-rtmps.png" alt="The same camera with Ignore SSL errors ticked: connected" width="49%">
+</p>
+
+Show a camera in a scene with the **IP camera** element (under *Media* in the editor): full screen, or small as picture-in-picture. The editor shows a recent picture; on air the camera is live. The cameras of the playout on air stay connected, so a camera scene starts with a picture straight away. For RTP, open the UDP port in your firewall.
+
+<p>
+  <img src="docs/screenshots/editor-camera.png" alt="Scene with a full-screen camera and a second camera as picture-in-picture" width="49%">
+  <img src="docs/screenshots/player-camera.png" alt="The camera scene on air" width="49%">
+</p>
+<p>
+  <img src="docs/screenshots/camera-add-rtp.png" alt="Adding an RTP camera with an optional SDP description" width="49%">
 </p>
 
 ## Schedule
@@ -289,7 +322,7 @@ Environment variables:
 ct/beeldkrant.sh               Proxmox host script (creates the LXC)
 install/beeldkrant-install.sh  Runs inside the container
 scripts/update.sh              The `update` command inside the container
-server/                        Node.js server: API, auth, schedule, feeds, stream pipelines, outputs
+server/                        Node.js server: API, auth, schedule, feeds, stream pipelines, outputs, IP cameras
 docs/screenshots/              Screenshots used in this README
 public/admin/                  Admin panel (plain JS, no build step)
 public/player/                 Player page and the shared scene renderer

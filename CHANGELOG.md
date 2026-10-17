@@ -2,6 +2,14 @@
 
 All notable changes to Beeldkrant. The admin panel shows this file under the Info button.
 
+## 0.6.0 (2026-10-17)
+
+### Added
+- IP cameras under Media management: add RTSP, RTMP, RTMPS and RTP cameras with a user name and password, RTSP over TCP or UDP, "Ignore SSL errors" for RTMPS, and an optional SDP description for RTP.
+- Test connection: shows what the camera sends (codec, resolution, frame rate, audio) or a clear reason why it fails (refused, wrong password, unknown path, SSL error, no answer).
+- Live preview of each camera with its state, frame rate and log; camera cards show a recent picture.
+- IP camera element for scenes: the camera live on air, in any size and position (full screen or picture-in-picture). Cameras of the playout on air stay connected, so a camera scene starts with a picture straight away, and reconnect by themselves when a camera drops.
+
 ## 0.5.0 (2026-10-17)
 
 ### Added
