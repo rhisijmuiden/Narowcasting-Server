@@ -186,7 +186,8 @@
       h('div', { class: 'row' },
         h('button', { onclick: async () => { try { draw(await POST('/api/system/update/check')); } catch (err) { fail(err); } } }, 'Check now'),
         u.canUpdate ? h('button', { class: u.available ? 'primary' : '', onclick: () => runUpdate(u) }, u.available ? 'Update now' : 'Reinstall latest') : null),
-      u.canUpdate ? null : h('div', { class: 'hint' }, 'Updating from the panel works on an installed container. You can always run update in the container shell.'));
+      u.canUpdate ? null : h('div', { class: 'hint' }, 'Updating from the panel works on an installed container. You can always run update in the container shell.'),
+      u.available && u.incoming ? h('details', { class: 'whats-new' }, h('summary', null, 'What the new version brings'), markdown(newEntries(u.incoming, u.version))) : null);
     try { draw(await GET('/api/system/update')); } catch (err) { put(box, h('h2', null, 'Software update'), h('div', { class: 'badge err' }, err.message)); }
     return box;
   }
@@ -201,6 +202,11 @@
     ['output', 'Stream output'],
     ['settings', 'Settings'],
   ];
+  const SYSTEM_NAV = [
+    ['info', 'Info'],
+    ['backups', 'Backups'],
+  ];
+  const SYSTEM_PAGES = SYSTEM_NAV.map(([id]) => id);
   let cleanup = null;
 
   async function route() {
@@ -218,6 +224,10 @@
       h('nav', { class: 'nav' },
         brand(),
         NAV.map(([id, label]) => h('a', { href: `#${id}`, class: page === id ? 'active' : '' }, label)),
+        me.user.role === 'admin' ? [
+          h('a', { href: '#info', class: SYSTEM_PAGES.includes(page) ? 'open' : '' }, 'System'),
+          SYSTEM_NAV.map(([id, label]) => h('a', { href: `#${id}`, class: `sub ${page === id ? 'active' : ''}` }, label)),
+        ] : null,
         h('div', { class: 'spacer' }),
         themeSwitch(),
         h('div', { class: 'who' }, `${me.user.username} (${me.user.role})`),
@@ -225,7 +235,7 @@
       ),
       main));
     if (me.user.role === 'admin') updateBanner(main);
-    const pages = { dashboard: pageDashboard, playouts: pagePlayouts, media: pageMedia, feeds: pageFeeds, schedule: pageSchedule, output: pageOutput, settings: pageSettings };
+    const pages = { dashboard: pageDashboard, playouts: pagePlayouts, media: pageMedia, feeds: pageFeeds, schedule: pageSchedule, output: pageOutput, settings: pageSettings, info: pageInfo, backups: pageBackups };
     try { await (pages[page] || pageDashboard)(main); } catch (err) { fail(err); }
   }
   window.addEventListener('hashchange', () => { if (!editorGuard()) route(); });
@@ -1370,8 +1380,210 @@
           field('Time zone', bind(data, 'timezone', () => {}, 'text', { placeholder: 'Europe/Amsterdam' }), { hint: 'Used by the schedule, clocks and dates.' }),
           field('Language for dates', bind(data, 'locale', () => {}, 'select', { options: [['en-GB', 'English (UK)'], ['en-US', 'English (US)'], ['nl-NL', 'Dutch'], ['de-DE', 'German'], ['fr-FR', 'French']] })),
           h('button', { class: 'primary', onclick: async () => { try { await PUT('/api/settings', data); toast('Saved', 'ok'); } catch (err) { fail(err); } } }, 'Save')),
-        h('div', { class: 'card stack' }, h('h2', null, 'Change password'), renderChangePassword(false)),
-        me.user.role === 'admin' ? await updateCard() : null));
+        h('div', { class: 'card stack' }, h('h2', null, 'Change password'), renderChangePassword(false))));
+  }
+
+  // ---------- system: info ----------
+  // Enough Markdown for CHANGELOG.md: headings, bullets, paragraphs, `code` and **bold**.
+  function markdown(text) {
+    const inline = (t) => t.split(/(`[^`]+`|\*\*[^*]+\*\*)/).map((part) => {
+      if (/^`[^`]+`$/.test(part)) return h('code', null, part.slice(1, -1));
+      if (/^\*\*[^*]+\*\*$/.test(part)) return h('b', null, part.slice(2, -2));
+      return part;
+    });
+    const box = h('div', { class: 'md' });
+    let list = null;
+    for (const line of String(text || '').split('\n')) {
+      const m = /^(#{1,4})\s+(.*)$/.exec(line);
+      if (/^\s*[-*]\s+/.test(line)) {
+        if (!list) box.appendChild(list = h('ul'));
+        list.appendChild(h('li', null, inline(line.replace(/^\s*[-*]\s+/, ''))));
+        continue;
+      }
+      list = null;
+      if (m) { if (m[1].length > 1) box.appendChild(h(m[1].length === 2 ? 'h3' : 'h4', null, inline(m[2]))); } else if (line.trim()) box.appendChild(h('p', null, inline(line)));
+    }
+    return box;
+  }
+
+  // The part of a changelog above the entry for `version`: what a newer version adds.
+  function newEntries(changelog, version) {
+    const lines = String(changelog || '').split('\n');
+    const at = lines.findIndex((l) => new RegExp(`^##\\s+\\[?${String(version).replace(/\./g, '\\.')}\\b`).test(l));
+    return (at > 0 ? lines.slice(0, at) : lines).join('\n');
+  }
+
+  const fmtDuration = (sec) => {
+    const d = Math.floor(sec / 86400); const hrs = Math.floor((sec % 86400) / 3600); const min = Math.floor((sec % 3600) / 60);
+    return d ? `${d}d ${hrs}h` : hrs ? `${hrs}h ${min}m` : `${min}m`;
+  };
+
+  async function pageInfo(main) {
+    const info = await GET('/api/system/info');
+    const row = (label, value) => h('tr', null, h('td', { class: 'muted' }, label), h('td', null, value));
+    main.append(h('h1', null, 'Info'),
+      h('div', { class: 'grid two' },
+        h('div', { class: 'card stack' }, h('h2', null, 'Build'),
+          h('table', { class: 'kv' },
+            row('Version', h('b', null, info.version || '?')),
+            row('Build', info.commit ? `${info.commit.slice(0, 7)} on branch ${info.branch}` : 'Not a git checkout'),
+            row('Build date', info.builtAt ? new Date(info.builtAt).toLocaleString() : '—'),
+            row('Node.js', info.node),
+            row('Running for', fmtDuration(info.uptime)),
+            row('Data folder', h('code', null, info.dataDir)))),
+        await updateCard()),
+      h('div', { class: 'card', style: { marginTop: '16px' } }, h('h2', null, 'Changelog'),
+        info.changelog ? markdown(info.changelog) : h('p', { class: 'muted' }, 'No changelog found.')));
+  }
+
+  // ---------- system: backups ----------
+  const PART_LABELS = { app: 'Application', database: 'Database', media: 'Media' };
+  const fmtSetDate = (id) => { const m = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(id); return m ? `${m[3]}-${m[2]}-${m[1]} ${m[4]}:${m[5]}` : id; };
+
+  async function pageBackups(main) {
+    const cfg = await GET('/api/backups/config');
+    const statusBox = h('div', { class: 'stack' });
+    const listBox = h('div');
+    const remoteBox = h('div', { class: 'fields' });
+    let location = 'local';
+    let wasRunning = false;
+
+    // ----- settings -----
+    const secrets = {}; // only sent when typed, so saved passwords never leave the server
+    function drawRemote() {
+      const r = cfg.remote;
+      const type = r.type || 'none';
+      if (type === 'none') { put(remoteBox, h('p', { class: 'muted wide' }, 'Backups are only kept on this server. Add an external location to keep copies elsewhere.')); return; }
+      const secret = (key, has, placeholder, textarea) => {
+        const attrs = { placeholder: has ? 'Saved. Type to replace it.' : placeholder, oninput: (e) => { secrets[key] = e.target.value; } };
+        return textarea ? h('textarea', { ...attrs, rows: 4 }) : h('input', { ...attrs, type: 'password', autocomplete: 'new-password' });
+      };
+      put(remoteBox,
+        field('Server', bind(r, 'host', () => {}, 'text', { placeholder: 'backup.example.com' })),
+        field('Port', bind(r, 'port', () => {}, 'number', { placeholder: type === 'sftp' ? '22' : '21', min: 1, max: 65535 })),
+        field('Username', bind(r, 'username', () => {}, 'text')),
+        field('Password', secret('password', r.hasPassword, type === 'sftp' ? 'Leave empty when you use a key' : '')),
+        type === 'sftp' ? field('Private key (optional)', secret('privateKey', r.hasPrivateKey, '-----BEGIN OPENSSH PRIVATE KEY-----', true), { wide: true, hint: 'Paste a private key to log in with a key instead of a password.' }) : null,
+        field('Folder on the server', bind(r, 'path', () => {}, 'text', { placeholder: '/beeldkrant-backups' }), { hint: 'Created when it does not exist. Without a leading / it is relative to the login folder.' }),
+        field('Keep external backups', bind(cfg, 'keepRemote', () => {}, 'number', { min: 1, max: 365 }), { hint: 'Older backups there are removed.' }),
+        type === 'ftps' ? h('label', { class: 'check wide' }, bind(r, 'allowSelfSigned', () => {}, 'checkbox'), 'Accept a self-signed certificate') : null);
+    }
+    const remotePayload = () => ({ ...cfg.remote, ...secrets });
+    async function save() {
+      try {
+        Object.assign(cfg, await PUT('/api/backups/config', { ...cfg, remote: remotePayload() }));
+        for (const k of Object.keys(secrets)) delete secrets[k];
+        drawRemote(); toast('Saved', 'ok'); refresh();
+      } catch (err) { fail(err); }
+    }
+    async function test(btn) {
+      btn.disabled = true; btn.textContent = 'Connecting…';
+      try {
+        const r = await POST('/api/backups/test', { remote: remotePayload() });
+        toast(`Connected. ${r.backups} backup file${r.backups === 1 ? '' : 's'} found there.`, 'ok');
+      } catch (err) { fail(err); }
+      btn.disabled = false; btn.textContent = 'Test connection';
+    }
+
+    const days = new Set(cfg.schedule.days || []);
+    const dayChips = h('div', { class: 'day-chips' }, DAY_LABELS.map(([d, label]) => h('button', {
+      class: `small ${days.has(d) ? 'on' : ''}`,
+      onclick: (e) => { days.has(d) ? days.delete(d) : days.add(d); e.target.classList.toggle('on'); cfg.schedule.days = [...days]; },
+    }, label)));
+    const testBtn = h('button', { onclick: () => test(testBtn) }, 'Test connection');
+
+    // ----- status, backup now -----
+    async function refresh() {
+      let st;
+      try { st = await GET('/api/backups/status'); } catch { return; }
+      const lastLine = (kind, label) => {
+        const l = st.last && st.last[kind];
+        if (!l) return null;
+        return h('div', null, h('span', { class: `badge ${l.ok ? 'ok' : 'err'}` }, l.ok ? 'OK' : 'Failed'), ` Last ${label} ${new Date(l.at).toLocaleString()}`, l.ok ? null : h('div', { class: 'hint' }, l.message));
+      };
+      const next = st.nextRun ? `Next scheduled backup: ${st.nextRun.inDays === 0 ? 'today' : st.nextRun.inDays === 1 ? 'tomorrow' : DAY_LABELS.find(([d]) => d === st.nextRun.day)[1]} at ${st.nextRun.time}` : 'No backups scheduled.';
+      put(statusBox,
+        h('div', { class: 'row between' },
+          h('div', null, st.running ? h('span', { class: 'badge warn' }, `${st.kind === 'restore' ? 'Restoring' : 'Backing up'}: ${st.phase}`) : h('span', { class: 'muted' }, next)),
+          h('button', { class: 'primary', disabled: st.running, onclick: async () => { try { await POST('/api/backups/run'); refresh(); } catch (err) { fail(err); } } }, 'Back up now')),
+        lastLine('backup', 'backup'),
+        lastLine('restore', 'restore'),
+        st.log.length ? h('div', { class: 'logs', style: { height: '140px' } }, st.log.join('\n')) : null);
+      const log = statusBox.querySelector('.logs');
+      if (log) log.scrollTop = log.scrollHeight;
+      if (wasRunning && !st.running) loadList();
+      wasRunning = st.running;
+    }
+
+    // ----- restore -----
+    async function loadList() {
+      put(listBox, h('p', { class: 'muted' }, 'Loading…'));
+      let sets;
+      try { sets = await GET(`/api/backups?location=${location}`); } catch (err) { put(listBox, h('div', { class: 'badge err' }, err.message)); return; }
+      if (!sets.length) { put(listBox, h('p', { class: 'muted' }, location === 'remote' ? 'No backups found on the external location.' : 'No backups on this server yet.')); return; }
+      put(listBox, h('table', { class: 'list' },
+        h('thead', null, h('tr', null, h('th', null, 'Date'), h('th', null, 'Contains'), h('th', null, 'Size'), h('th'))),
+        h('tbody', null, sets.map((set) => h('tr', null,
+          h('td', null, fmtSetDate(set.id)),
+          h('td', null, set.parts.map((p) => h('span', { class: 'badge', style: { marginRight: '4px' } }, PART_LABELS[p]))),
+          h('td', null, fmtBytes(set.size)),
+          h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
+            h('button', { class: 'small', onclick: () => restoreDialog(set) }, 'Restore…'),
+            location === 'local' ? set.files.map((f) => h('a', { class: 'btn small', style: { marginLeft: '4px' }, href: `/api/backups/download/${encodeURIComponent(f.name)}`, title: f.name }, set.files.length > 1 ? `↓ ${f.parts.map((p) => PART_LABELS[p]).join(', ')}` : '↓ Download')) : null,
+            h('button', { class: 'small ghost', onclick: async () => {
+              if (!(await confirmBox(`Delete the backup of ${fmtSetDate(set.id)}${location === 'remote' ? ' from the external location' : ''}?`))) return;
+              try { await DEL(`/api/backups/${set.id}?location=${location}`); loadList(); } catch (err) { fail(err); }
+            } }, 'Delete')))))));
+    }
+
+    function restoreDialog(set) {
+      const chosen = Object.fromEntries(set.parts.map((p) => [p, p !== 'app']));
+      const warn = {
+        database: 'Replaces all playouts, scenes, schedule, feeds, users and settings.',
+        media: 'Replaces all media files and folders on disk.',
+        app: 'Puts back the program code of that backup and restarts Beeldkrant.',
+      };
+      modal(`Restore backup of ${fmtSetDate(set.id)}`, h('div', { class: 'stack' },
+        h('p', { class: 'muted' }, `From ${location === 'remote' ? 'the external location' : 'this server'}. Choose what to put back:`),
+        set.parts.map((p) => h('label', { class: 'check' }, bind(chosen, p, () => {}, 'checkbox'), h('span', null, h('b', null, PART_LABELS[p]), h('div', { class: 'hint' }, warn[p])))),
+        h('p', { class: 'hint' }, 'Tip: make a fresh backup first, so you can go back.')),
+      (close) => [h('button', { onclick: close }, 'Cancel'), h('button', { class: 'danger', onclick: async () => {
+        const parts = Object.keys(chosen).filter((p) => chosen[p]);
+        if (!parts.length) { toast('Choose what to restore', 'err'); return; }
+        try { await POST('/api/backups/restore', { location, id: set.id, parts }); close(); toast('Restore started', 'ok'); refresh(); } catch (err) { fail(err); }
+      } }, 'Restore')]);
+    }
+
+    const tabs = h('div', { class: 'tabs' }, [['local', 'On this server'], ['remote', 'External location']].map(([id, label]) => h('button', {
+      class: id === location ? 'active' : '',
+      onclick: (e) => { location = id; tabs.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === e.target)); loadList(); },
+    }, label)));
+
+    main.append(h('h1', null, 'Backups'),
+      h('div', { class: 'card', style: { marginBottom: '16px' } }, statusBox),
+      h('div', { class: 'grid two' },
+        h('div', { class: 'card stack' }, h('h2', null, 'What to back up'),
+          ['app', 'database', 'media'].map((p) => h('label', { class: 'check' }, bind(cfg.parts, p, () => {}, 'checkbox'), h('span', null, h('b', null, PART_LABELS[p]), h('div', { class: 'hint' }, {
+            app: 'The program code and its settings, without installed packages.',
+            database: 'Playouts, scenes, schedule, feeds, media list and folders, users and settings.',
+            media: 'All uploaded files in all media folders.',
+          }[p])))),
+          field('Archives', bind(cfg, 'layout', () => {}, 'select', { options: [['single', 'One archive with everything'], ['separate', 'A separate archive per part']] }), { hint: 'Separate archives keep the large media apart from the application and database.' }),
+          field('Keep backups on this server', bind(cfg, 'keepLocal', () => {}, 'number', { min: 0, max: 365 }), { hint: 'Older backups are removed. 0 keeps none here once they are copied to the external location.' })),
+        h('div', { class: 'card stack' }, h('h2', null, 'Schedule'),
+          h('label', { class: 'check' }, bind(cfg.schedule, 'enabled', () => {}, 'checkbox'), 'Make backups automatically'),
+          field('Days', dayChips),
+          field('Time', bind(cfg.schedule, 'time', () => {}, 'time'), { hint: 'In the time zone set under Settings.' }))),
+      h('div', { class: 'card stack', style: { marginTop: '16px' } }, h('h2', null, 'External location'),
+        field('Type', bind(cfg.remote, 'type', drawRemote, 'select', { options: [['none', 'None'], ['ftp', 'FTP'], ['ftps', 'FTPS (FTP over TLS)'], ['sftp', 'SCP / SFTP (SSH)']] })),
+        remoteBox,
+        h('div', { class: 'row' }, h('button', { class: 'primary', onclick: save }, 'Save backup settings'), testBtn)),
+      h('div', { class: 'card stack', style: { marginTop: '16px' } }, h('h2', null, 'Restore'), tabs, listBox));
+    drawRemote();
+    refresh();
+    loadList();
+    const iv = setInterval(refresh, 2000);
+    cleanup = () => clearInterval(iv);
   }
 
   route();

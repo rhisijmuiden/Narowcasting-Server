@@ -2,8 +2,10 @@
 # Updates Beeldkrant to the latest version. Installed as /usr/bin/update in the LXC container,
 # so running `update` in the container shell is all that is needed.
 #
-#   update            update to the latest version of the configured branch
-#   update --force    reinstall even when already up to date
+#   update                      update to the latest version of the configured branch
+#   update --force              reinstall even when already up to date
+#   update --restore-app DIR    put back the application from an unpacked backup
+#   update --request FILE       do what the admin panel asked for in FILE (used by beeldkrant-update.service)
 set -euo pipefail
 
 APP_DIR="${BEELDKRANT_DIR:-/opt/beeldkrant}"
@@ -11,7 +13,17 @@ APP_DIR="${BEELDKRANT_DIR:-/opt/beeldkrant}"
 REF="${BEELDKRANT_REF:-main}"
 SERVICE="beeldkrant"
 FORCE=0
-[[ "${1:-}" == "--force" ]] && FORCE=1
+RESTORE_DIR=""
+case "${1:-}" in
+  --force) FORCE=1 ;;
+  --restore-app) RESTORE_DIR="${2:-}" ;;
+  --request)
+    # The panel writes "restore-app <dir>" for a restore; anything else means update.
+    REQUEST="$(cat "${2:-}" 2>/dev/null || true)"
+    rm -f "${2:-}"
+    [[ "$REQUEST" == restore-app\ * ]] && RESTORE_DIR="${REQUEST#restore-app }"
+    ;;
+esac
 
 if [[ -t 1 ]]; then GN=$'\e[32m'; YW=$'\e[33m'; RD=$'\e[31m'; CL=$'\e[0m'; else GN=''; YW=''; RD=''; CL=''; fi
 info() { echo -e "${YW}▶${CL} $*"; }
@@ -19,7 +31,7 @@ ok() { echo -e "${GN}✔${CL} $*"; }
 die() { echo -e "${RD}✖${CL} $*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "Run update as root."
-[[ -d "$APP_DIR/.git" ]] || die "No Beeldkrant installation found in $APP_DIR."
+[[ -d "$APP_DIR/.git" || -n "$RESTORE_DIR" ]] || die "No Beeldkrant installation found in $APP_DIR."
 
 # The checkout belongs to the service user; let root's git work on it.
 git_() { git -c safe.directory="$APP_DIR" -C "$APP_DIR" "$@"; }
@@ -32,6 +44,37 @@ install_units() {
   systemctl daemon-reload
   systemctl enable --quiet --now beeldkrant-update.path || true
 }
+
+# Installs dependencies, fixes ownership, refreshes this command and starts the service.
+finish() {
+  (cd "$APP_DIR" && npm ci --omit=dev --no-audit --no-fund --loglevel=error) || {
+    systemctl start "$SERVICE" || true
+    die "Installing dependencies failed; Beeldkrant was restarted with the files it has now."
+  }
+  chown -R "$SERVICE:$SERVICE" "$APP_DIR"
+  # Keep this command and the panel's update service current.
+  install -m 0755 "$APP_DIR/scripts/update.sh" /usr/bin/update
+  install_units
+
+  info "Starting Beeldkrant"
+  systemctl start "$SERVICE"
+  sleep 2
+  systemctl is-active --quiet "$SERVICE" || die "Beeldkrant did not start. See: journalctl -u $SERVICE -n 50"
+}
+
+if [[ -n "$RESTORE_DIR" ]]; then
+  [[ -f "$RESTORE_DIR/package.json" ]] || die "No Beeldkrant application found in $RESTORE_DIR."
+  OLD_VERSION="$(version)"
+  info "Stopping Beeldkrant"
+  systemctl stop "$SERVICE" || true
+  info "Restoring the application from the backup"
+  find "$APP_DIR" -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +
+  cp -a "$RESTORE_DIR/." "$APP_DIR/"
+  rm -rf "$RESTORE_DIR"
+  finish
+  ok "Restored Beeldkrant ${OLD_VERSION} → $(version) from the backup."
+  exit 0
+fi
 
 info "Checking for updates ($REF)"
 git_ fetch --quiet --depth 1 origin "$REF" || die "Could not reach the repository."
@@ -49,18 +92,6 @@ systemctl stop "$SERVICE" || true
 
 info "Installing ${LATEST:0:7}"
 git_ reset --quiet --hard FETCH_HEAD
-(cd "$APP_DIR" && npm ci --omit=dev --no-audit --no-fund --loglevel=error) || {
-  systemctl start "$SERVICE" || true
-  die "Installing dependencies failed; Beeldkrant was restarted with the files it has now."
-}
-chown -R "$SERVICE:$SERVICE" "$APP_DIR"
-# Keep this command and the panel's update service current.
-install -m 0755 "$APP_DIR/scripts/update.sh" /usr/bin/update
-install_units
-
-info "Starting Beeldkrant"
-systemctl start "$SERVICE"
-sleep 2
-systemctl is-active --quiet "$SERVICE" || die "Beeldkrant did not start. See: journalctl -u $SERVICE -n 50"
+finish
 
 ok "Updated Beeldkrant ${OLD_VERSION} (${CURRENT:0:7}) → $(version) (${LATEST:0:7})."
