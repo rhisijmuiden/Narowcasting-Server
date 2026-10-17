@@ -233,7 +233,7 @@
     '-',
     ['schedule', 'Schedule'],
     '-',
-    ['output', 'Outputs'],
+    ['output', 'Outputs', [['routing', 'Routing']]],
     '-',
     ['settings', 'Settings', [['settings', 'Application'], ['backups', 'Backups', null, { admin: true }]]],
   ];
@@ -295,7 +295,7 @@
     if (me.user.role === 'admin' && page !== 'info') updateBanner(main);
     const pages = {
       dashboard: pageDashboard, stats: pageStats, playouts: pagePlayouts, library: pageLibrary, media: pageMedia, feeds: pageFeeds, streams: pageStreams,
-      schedule: pageSchedule, output: pageOutput, settings: pageSettings, backups: pageBackups, info: pageInfo, account: pageAccount,
+      schedule: pageSchedule, output: pageOutput, routing: pageRouting, settings: pageSettings, backups: pageBackups, info: pageInfo, account: pageAccount,
     };
     try { await (pages[page] || pageDashboard)(main, arg); } catch (err) { fail(err); }
   }
@@ -364,18 +364,21 @@
       try {
         const [s, settings, playouts, logLines] = await Promise.all([GET('/api/stream'), GET('/api/settings'), GET('/api/playouts'), GET('/api/stream/logs')]);
         const onAir = playouts.find((p) => p.id === settings.activePlayoutId);
-        const cls = { live: 'ok', starting: 'warn', restarting: 'warn', stopped: '', error: 'err' }[s.state] || '';
+        const cls = { live: 'ok', starting: 'warn', restarting: 'warn', stopped: '', idle: '', error: 'err' }[s.state] || '';
         const missing = ['xvfb', 'chromium', 'ffmpeg'].filter((t) => !s.tools[t]);
         put(statusBox, 
           h('div', { class: 'row' }, h('span', { class: `badge ${cls}` }, h('span', { class: 'dot' }), s.state.toUpperCase()),
             s.lastError && s.state !== 'live' ? h('span', { class: 'muted' }, s.lastError) : null),
           h('div', { class: 'row', style: { gap: '28px' } },
             h('div', { class: 'stat' }, h('small', null, 'Playout'), h('b', null, onAir ? onAir.name : 'none')),
+            (s.pipelines || []).some((p) => p.source !== 'schedule') ? h('div', { class: 'stat' }, h('small', null, 'Routed playouts'), h('a', { href: '#routing' }, h('b', null, s.pipelines.filter((p) => p.source !== 'schedule').map((p) => p.label).join(', ')))) : null,
             h('div', { class: 'stat' }, h('small', null, 'Output'), h('b', null, s.resolution || '-')),
             h('div', { class: 'stat' }, h('small', null, 'FPS'), h('b', null, s.stats.fps || '-')),
             h('div', { class: 'stat' }, h('small', null, 'Bitrate'), h('b', null, s.stats.bitrate || '-')),
             h('div', { class: 'stat' }, h('small', null, 'Speed'), h('b', null, s.stats.speed || '-'))),
-          h('div', null, h('small', null, 'Destination: '), s.destination || h('a', { href: '#output' }, 'not set')),
+          h('div', null, h('small', null, 'Outputs: '), s.outputs.filter((o) => o.enabled).length
+            ? s.outputs.filter((o) => o.enabled).map((o) => h('span', { class: `badge ${(STATE_BADGE[o.state] || [''])[0]}`, style: { marginRight: '6px' } }, o.name))
+            : h('a', { href: '#output' }, 'none turned on')),
           missing.length ? h('div', { class: 'badge err' }, `Missing on this server: ${missing.join(', ')}`) : null,
           h('div', { class: 'row' },
             s.wanted
@@ -404,7 +407,8 @@
   ];
 
   async function pagePlayouts(main) {
-    const [playouts, settings] = await Promise.all([GET('/api/playouts'), GET('/api/settings')]);
+    const [playouts, settings, outs] = await Promise.all([GET('/api/playouts'), GET('/api/settings'), GET('/api/outputs')]);
+    const routed = (p) => outs.filter((o) => o.source === p.id);
     main.append(
       h('div', { class: 'row between' }, h('h1', null, 'Playouts'), h('button', { class: 'primary', onclick: newPlayoutWizard }, '+ New playout')),
       playouts.length ? h('div', { class: 'card' }, h('table', null,
@@ -413,13 +417,25 @@
           h('td', null, h('a', { href: `#playout/${p.id}` }, p.name)),
           h('td', null, `${p.width} x ${p.height}`),
           h('td', null, String((p.slides || []).length)),
-          h('td', null, p.id === settings.activePlayoutId ? h('span', { class: 'badge ok' }, h('span', { class: 'dot' }), 'On air') : ''),
+          h('td', null, p.id === settings.activePlayoutId ? h('span', { class: 'badge ok' }, h('span', { class: 'dot' }), 'On air') : '', ' ',
+            routed(p).length ? h('a', { class: 'badge', href: '#routing', title: routed(p).map((o) => o.name).join(', ') }, `Routed to ${routed(p).length} output${routed(p).length === 1 ? '' : 's'}`) : ''),
           h('td', { style: { textAlign: 'right' } },
             h('a', { class: 'btn', href: `/player/?playout=${p.id}`, target: '_blank' }, 'Preview'), ' ',
-            h('button', { onclick: async () => { const c = clone(p); delete c.id; c.name += ' (copy)'; await POST('/api/playouts', c); route(); } }, 'Duplicate'), ' ',
+            h('button', { onclick: () => cloneDialog(p, () => route()) }, 'Clone'), ' ',
             h('button', { class: 'ghost', onclick: async () => { if (await confirmBox(`Delete playout "${p.name}"?`)) { await DEL(`/api/playouts/${p.id}`); route(); } } }, 'Delete')),
         )))) : h('div', { class: 'card' }, h('p', null, 'No playouts yet. A playout is a channel: a resolution and a series of scenes.')),
     );
+  }
+
+  // A full copy of a playout, e.g. a clean feed without overlays or ads for another output.
+  function cloneDialog(p, onCloned) {
+    const data = { name: `${p.name} (copy)` };
+    modal(`Clone ${p.name}`, h('div', { class: 'stack' },
+      field('Name of the copy', bind(data, 'name', () => {})),
+      h('p', { class: 'muted', style: { margin: 0 } }, 'Copies every scene, overlay, ad block and the music. The copy is not on the schedule; route an output to it under Outputs → Routing to send it.')),
+    (close) => [h('button', { onclick: close }, 'Cancel'), h('button', { class: 'primary', onclick: async () => {
+      try { const c = await POST(`/api/playouts/${p.id}/clone`, data); close(); toast(`Cloned as ${c.name}`, 'ok'); onCloned(c); } catch (err) { fail(err); }
+    } }, 'Clone')]);
   }
 
   function newPlayoutWizard() {
@@ -518,6 +534,10 @@
           h('button', { id: 'tab-overlay', onclick: () => { S.mode = 'overlay'; S.selected = null; renderAll(); } }, 'Overlays')),
         h('button', { onclick: () => { S.selected = null; S.mode = 'settings'; renderAll(); } }, 'Playout settings'),
         h('a', { class: 'btn', href: `/player/?playout=${playout.id}`, target: '_blank' }, 'Preview ▶'),
+        h('button', { title: 'Make a full copy of this playout', onclick: async () => {
+          if (editorDirty) await save();
+          if (!editorDirty) cloneDialog(playout, (c) => { location.hash = `playout/${c.id}`; });
+        } }, 'Clone'),
         saveBtn),
       sideEl,
       h('div', { class: 'canvas-wrap' }, toolbar, area),
@@ -1395,35 +1415,274 @@
   }
 
   // ---------- output ----------
+  // ---------- outputs ----------
+  const OUTPUT_TYPES = { custom: 'RTMP / RTMPS / SRT', youtube: 'YouTube', facebook: 'Facebook' };
+  const STATE_BADGE = { live: ['ok', 'Live'], connecting: ['warn', 'Connecting'], reconnecting: ['warn', 'Reconnecting'], error: ['err', 'Error'], stopped: ['', 'Stopped'] };
+
+  // Links a YouTube or Facebook account with a device code: shows the code and waits for the user.
+  async function linkAccount(provider, onLinked) {
+    let link;
+    try { link = await POST('/api/accounts/link', { provider }); } catch (err) { fail(err); return; }
+    const name = provider === 'youtube' ? 'Google' : 'Facebook';
+    const state = h('p', { class: 'muted' }, 'Waiting for you to enter the code…');
+    let done = false;
+    const close = modal(`Connect ${provider === 'youtube' ? 'YouTube' : 'Facebook'}`, h('div', { class: 'stack', style: { textAlign: 'center' } },
+      h('p', null, `1. Open `, h('a', { href: link.url, target: '_blank', rel: 'noopener' }, link.url), ` on any device and sign in with ${name}.`),
+      h('p', null, '2. Enter this code:'),
+      h('div', { class: 'device-code' }, link.userCode),
+      h('p', null, `3. Allow Beeldkrant to manage your ${provider === 'youtube' ? 'YouTube live streams' : 'live videos'}.`),
+      state),
+    (c) => [h('button', { onclick: () => { done = true; DEL(`/api/accounts/link/${link.id}`).catch(() => {}); c(); } }, 'Cancel')]);
+    while (!done) {
+      await new Promise((r) => setTimeout(r, 3000));
+      if (done) return;
+      let st;
+      try { st = await GET(`/api/accounts/link/${link.id}`); } catch (err) { state.textContent = err.message; return; }
+      if (st.state === 'linked') { done = true; close(); toast('Account connected', 'ok'); onLinked(st.accountId); return; }
+      if (st.state !== 'waiting') { state.textContent = st.error || 'Linking stopped.'; state.className = 'badge err'; return; }
+    }
+  }
+
+  function credentialsDialog(onSaved) {
+    const data = { googleClientId: '', facebookAppId: '' };
+    const secrets = {};
+    GET('/api/connections').then((c) => {
+      data.googleClientId = c.googleClientId; data.facebookAppId = c.facebookAppId;
+      gId.value = c.googleClientId || ''; fId.value = c.facebookAppId || '';
+      gSecret.placeholder = c.hasGoogleClientSecret ? 'Saved. Type to replace it.' : '';
+      fToken.placeholder = c.hasFacebookClientToken ? 'Saved. Type to replace it.' : '';
+    }).catch(fail);
+    const gId = bind(data, 'googleClientId', () => {});
+    const fId = bind(data, 'facebookAppId', () => {});
+    const gSecret = h('input', { type: 'password', autocomplete: 'new-password', oninput: (e) => { secrets.googleClientSecret = e.target.value; } });
+    const fToken = h('input', { type: 'password', autocomplete: 'new-password', oninput: (e) => { secrets.facebookClientToken = e.target.value; } });
+    modal('Account linking', h('div', { class: 'stack' },
+      h('h3', { style: { marginTop: 0 } }, 'YouTube'),
+      h('ol', { class: 'steps' },
+        h('li', null, 'In ', h('a', { href: 'https://console.cloud.google.com/apis/library/youtube.googleapis.com', target: '_blank', rel: 'noopener' }, 'Google Cloud Console'), ' enable the YouTube Data API v3 for a project.'),
+        h('li', null, 'Under APIs & Services → Credentials, create an OAuth client ID of type ', h('b', null, 'TVs and Limited Input devices'), '.'),
+        h('li', null, 'Copy its client ID and secret here. Add your Google account as a test user while the app is in testing.')),
+      h('div', { class: 'fields' }, field('Client ID', gId), field('Client secret', gSecret)),
+      h('h3', null, 'Facebook'),
+      h('ol', { class: 'steps' },
+        h('li', null, 'Create an app at ', h('a', { href: 'https://developers.facebook.com/apps', target: '_blank', rel: 'noopener' }, 'Meta for Developers'), ' and add Facebook Login.'),
+        h('li', null, 'Under Facebook Login → Settings, switch on ', h('b', null, 'Login from Devices'), '.'),
+        h('li', null, 'Copy the App ID and the Client token (Settings → Advanced) here. Until Meta has reviewed the app, only people with a role on the app can go live through it.')),
+      h('div', { class: 'fields' }, field('App ID', fId), field('Client token', fToken))),
+    (close) => [h('button', { onclick: close }, 'Cancel'), h('button', { class: 'primary', onclick: async () => {
+      try { await PUT('/api/connections', { ...data, ...secrets }); close(); toast('Saved', 'ok'); if (onSaved) onSaved(); } catch (err) { fail(err); }
+    } }, 'Save')]);
+  }
+
+  async function outputDialog(existing, accounts, onSaved) {
+    const o = existing ? clone(existing) : { name: '', type: 'custom', mode: 'account', url: '', title: '', description: '', privacy: 'unlisted', enabled: true, source: 'schedule' };
+    let playouts = [];
+    try { playouts = await GET('/api/playouts'); } catch { /* the list stays empty */ }
+    o.mode = o.mode || 'account';
+    const secrets = {};
+    const body = h('div', { class: 'stack' });
+    const pagesCache = {};
+    async function draw() {
+      const own = accounts.filter((a) => a.provider === o.type);
+      if (o.type !== 'custom' && o.mode === 'account' && !own.some((a) => a.id === o.accountId)) o.accountId = own[0] ? own[0].id : null;
+      let pageField = null;
+      if (o.type === 'facebook' && o.mode === 'account' && o.accountId) {
+        if (!pagesCache[o.accountId]) {
+          pagesCache[o.accountId] = 'loading';
+          GET(`/api/accounts/${o.accountId}/pages`).then((p) => { pagesCache[o.accountId] = p; draw(); }).catch((err) => { pagesCache[o.accountId] = []; toast(err.message, 'err'); draw(); });
+        }
+        const pages = Array.isArray(pagesCache[o.accountId]) ? pagesCache[o.accountId] : [];
+        pageField = field('Go live on', bind(o, 'facebookPageId', () => {}, 'select', { options: [['', 'My profile'], ...pages.map((p) => [p.id, `Page: ${p.name}`])] }),
+          { hint: pagesCache[o.accountId] === 'loading' ? 'Loading your pages…' : 'A page needs the account to be an admin of that page.' });
+      }
+      const keyInput = h('input', { type: 'password', autocomplete: 'new-password', placeholder: existing && existing.hasStreamKey ? 'Saved. Type to replace it.' : 'xxxx-xxxx-xxxx-xxxx', oninput: (e) => { secrets.streamKey = e.target.value; } });
+      put(body,
+        h('div', { class: 'fields' },
+          field('Name', bind(o, 'name', () => {}, 'text', { placeholder: 'e.g. YouTube channel' })),
+          field('Type', bind(o, 'type', draw, 'select', { options: Object.entries(OUTPUT_TYPES) }))),
+        field('Sends', bind(o, 'source', () => {}, 'select', { options: [['schedule', 'The schedule (whatever is on air)'], ...playouts.map((p) => [p.id, `Playout: ${p.name}`])] }),
+          { hint: 'Send a fixed playout, for example a clean feed, instead of the schedule. See Outputs → Routing.' }),
+        o.type === 'custom' ? field('Destination', bind(o, 'url', () => {}, 'text', { placeholder: 'rtmp://server/live/streamkey  or  srt://server:9000?streamid=…' }),
+          { hint: 'RTMP and RTMPS are sent as FLV, SRT as MPEG-TS.' }) : [
+          field('Connect with', bind(o, 'mode', draw, 'select', { options: [['account', 'Connected account (goes live automatically)'], ['key', 'Stream key']] })),
+          o.mode === 'key' ? field('Stream key', keyInput, { hint: o.type === 'youtube' ? 'From YouTube Studio → Go live → Stream. Sent to rtmps://a.rtmps.youtube.com/live2.' : 'From Facebook Live Producer → Streaming software. Sent to rtmps://live-api-s.facebook.com:443/rtmp.' }) : [
+            own.length ? field('Account', bind(o, 'accountId', draw, 'select', { options: own.map((a) => [a.id, a.name]) }))
+              : h('div', { class: 'row' }, h('span', { class: 'muted' }, `No ${OUTPUT_TYPES[o.type]} account connected yet.`), me.user.role === 'admin' ? h('button', { class: 'small', onclick: () => linkAccount(o.type, async (id) => { accounts = await GET('/api/accounts'); o.accountId = id; draw(); }) }, `Connect ${OUTPUT_TYPES[o.type]}`) : null),
+            pageField,
+            field('Title', bind(o, 'title', () => {}, 'text', { placeholder: o.name || 'Live' }), { hint: 'Title of the live broadcast. Empty uses the output name.' }),
+            field('Description', bind(o, 'description', () => {}, 'textarea')),
+            o.type === 'youtube' ? field('Privacy', bind(o, 'privacy', () => {}, 'select', { options: [['public', 'Public'], ['unlisted', 'Unlisted'], ['private', 'Private']] })) : null,
+          ]],
+        h('label', { class: 'check' }, bind(o, 'enabled', () => {}, 'checkbox'), 'On (sends whenever the stream runs)'));
+    }
+    draw();
+    modal(existing ? `Edit ${existing.name}` : 'Add output', body, (close) => [h('button', { onclick: close }, 'Cancel'), h('button', { class: 'primary', onclick: async () => {
+      try {
+        const payload = { ...o, ...secrets };
+        if (existing) await PUT(`/api/outputs/${existing.id}`, payload); else await POST('/api/outputs', payload);
+        close(); toast('Saved', 'ok'); onSaved();
+      } catch (err) { fail(err); }
+    } }, 'Save')]);
+  }
+
   async function pageOutput(main) {
-    const [out, status] = await Promise.all([GET('/api/output'), GET('/api/stream')]);
+    let [list, accounts, out, status, playouts] = await Promise.all([GET('/api/outputs'), GET('/api/accounts'), GET('/api/output'), GET('/api/stream'), GET('/api/playouts')]);
+    const isAdmin = me.user.role === 'admin';
+    const listEl = h('div');
+    const streamLine = h('div');
+    const accountsEl = h('div', { class: 'stack' });
+    const openLogs = new Set();
+    async function reload() { [list, accounts] = await Promise.all([GET('/api/outputs'), GET('/api/accounts')]); refresh(); drawAccounts(); }
+
+    async function refresh() {
+      try { status = await GET('/api/stream'); } catch { return; }
+      const running = status.wanted;
+      put(streamLine, h('div', { class: 'row between' },
+        h('div', null, running ? h('span', { class: `badge ${status.state === 'live' ? 'ok' : 'warn'}` }, h('span', { class: 'dot' }), `Stream ${status.state}`) : h('span', { class: 'muted' }, 'The stream is stopped. Outputs that are on start when it starts.')),
+        running ? h('button', { class: 'danger small', onclick: () => POST('/api/stream/stop').then(refresh).catch(fail) }, 'Stop stream')
+          : h('button', { class: 'primary small', onclick: () => POST('/api/stream/start').then(refresh).catch(fail) }, 'Start stream')));
+      const byId = Object.fromEntries(status.outputs.map((s) => [s.id, s]));
+      if (!list.length) { put(listEl, h('p', { class: 'muted' }, 'No outputs yet. Add one to send the stream to a server, YouTube or Facebook.')); return; }
+      put(listEl, list.map((o) => {
+        const st = byId[o.id] || { state: 'stopped', stats: {} };
+        const [cls, label] = o.enabled ? STATE_BADGE[st.state] || ['', st.state] : ['', 'Off'];
+        const toggle = h('label', { class: 'switch', title: o.enabled ? 'Turn off' : 'Turn on' }, h('input', { type: 'checkbox', checked: o.enabled, onchange: (e) => POST(`/api/outputs/${o.id}/enable`, { enabled: e.target.checked }).then(reload).catch(fail) }), h('span'));
+        return h('div', { class: 'output-row' },
+          toggle,
+          h('div', { class: 'output-main' },
+            h('div', { class: 'row', style: { gap: '8px' } }, h('b', null, o.name), h('span', { class: `badge type-${o.type}` }, OUTPUT_TYPES[o.type]), h('span', { class: `badge ${cls}` }, label),
+              st.stats && st.stats.bitrate && st.state === 'live' ? h('small', { class: 'muted' }, st.stats.bitrate) : null,
+              st.watchUrl ? h('a', { href: st.watchUrl, target: '_blank', rel: 'noopener' }, 'Watch ↗') : null),
+            h('small', { class: 'muted' }, st.destination || '', ' · sends ', h('a', { href: '#routing' }, sourceLabel(o.source, playouts))),
+            st.error && o.enabled ? h('div', { class: 'hint', style: { color: 'var(--danger)' } }, st.error) : null,
+            openLogs.has(o.id) ? h('div', { class: 'logs', style: { height: '120px', marginTop: '6px' } }, st.log.join('\n') || 'Nothing logged yet.') : null),
+          h('div', { class: 'row', style: { gap: '4px' } },
+            h('button', { class: 'small ghost', onclick: () => { openLogs.has(o.id) ? openLogs.delete(o.id) : openLogs.add(o.id); refresh(); } }, openLogs.has(o.id) ? 'Hide log' : 'Log'),
+            h('button', { class: 'small', onclick: () => outputDialog(o, accounts, reload) }, 'Edit'),
+            h('button', { class: 'small ghost', onclick: async () => { if (await confirmBox(`Delete the output "${o.name}"?`)) { await DEL(`/api/outputs/${o.id}`).catch(fail); reload(); } } }, 'Delete')));
+      }));
+    }
+
+    function drawAccounts() {
+      put(accountsEl,
+        accounts.length ? h('table', { class: 'list' }, h('tbody', null, accounts.map((a) => h('tr', null,
+          h('td', null, h('span', { class: `badge type-${a.provider}` }, OUTPUT_TYPES[a.provider])), h('td', null, a.name),
+          h('td', { style: { textAlign: 'right' } }, isAdmin ? h('button', { class: 'small ghost', onclick: async () => {
+            if (await confirmBox(`Disconnect ${a.name}? Outputs that use it stop going live until you choose another account.`)) { await DEL(`/api/accounts/${a.id}`).catch(fail); reload(); }
+          } }, 'Disconnect') : null)))))
+          : h('p', { class: 'muted' }, 'No accounts connected. Connect YouTube or Facebook so outputs can create the live broadcast for you.'),
+        isAdmin ? h('div', { class: 'row' },
+          h('button', { onclick: () => linkAccount('youtube', reload) }, 'Connect YouTube'),
+          h('button', { onclick: () => linkAccount('facebook', reload) }, 'Connect Facebook'),
+          h('button', { class: 'ghost', onclick: () => credentialsDialog() }, 'Linking settings…')) : null);
+    }
+
     const fixedFields = h('div', { class: 'fields' });
-    const drawFixed = () => {
-      fixedFields.style.display = out.resolutionMode === 'fixed' ? '' : 'none';
-    };
+    const drawFixed = () => { fixedFields.style.display = out.resolutionMode === 'fixed' ? '' : 'none'; };
     fixedFields.append(field('Width', bind(out, 'width', () => {}, 'number')), field('Height', bind(out, 'height', () => {}, 'number')));
     drawFixed();
     const hw = [status.tools.vaapi ? 'VAAPI (Intel/AMD)' : null, status.tools.nvenc ? 'NVENC (NVIDIA)' : null].filter(Boolean);
-    main.append(h('h1', null, 'Stream output'),
-      h('div', { class: 'card stack', style: { maxWidth: '760px' } },
-        field('Destination', bind(out, 'url', () => {}, 'text', { placeholder: 'rtmp://server/live/streamkey  or  srt://server:9000?streamid=…' }),
-          { hint: 'RTMP and RTMPS are sent as FLV, SRT as MPEG-TS. This server only sends; the stream server receives.' }),
-        h('h3', null, 'Video'),
-        h('div', { class: 'fields' },
-          field('Resolution', bind(out, 'resolutionMode', drawFixed, 'select', { options: [['playout', 'Follow the playout on air'], ['fixed', 'Fixed output size (scaled)']] }), { wide: true }),
-          h('div', { class: 'wide' }, fixedFields),
-          field('Frame rate', bind(out, 'fps', () => {}, 'select', { options: [['25', '25 fps'], ['30', '30 fps'], ['50', '50 fps'], ['60', '60 fps']] })),
-          field('Video bitrate (kbit/s)', bind(out, 'videoBitrate', () => {}, 'number', { min: 200 })),
-          field('Encoder', bind(out, 'encoder', () => {}, 'select', { options: [['libx264', 'CPU (x264)'], ['h264_vaapi', 'GPU: Intel/AMD (VAAPI)'], ['h264_nvenc', 'GPU: NVIDIA (NVENC)']] }),
-            { hint: hw.length ? `Detected: ${hw.join(', ')}` : 'No GPU detected in this container.' }),
-          field('x264 preset', bind(out, 'preset', () => {}, 'select', { options: ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium'].map((p) => [p, p]) }), { hint: 'Faster presets use less CPU.' })),
-        h('h3', null, 'Audio'),
-        h('div', { class: 'fields' },
-          h('label', { class: 'check' }, bind(out, 'audio', () => {}, 'checkbox'), 'Send audio from videos'),
-          field('Audio bitrate (kbit/s)', bind(out, 'audioBitrate', () => {}, 'number', { min: 32 }))),
-        h('div', { class: 'row' }, h('button', { class: 'primary', onclick: async () => {
-          try { await PUT('/api/output', { ...out, fps: Number(out.fps) }); toast(status.wanted ? 'Saved. The stream restarts with the new settings.' : 'Saved', 'ok'); } catch (err) { fail(err); }
-        } }, 'Save'), h('a', { href: '#dashboard' }, 'Start or stop the stream on the dashboard'))));
+
+    main.append(h('div', { class: 'row between' }, h('h1', null, 'Outputs'), h('button', { class: 'primary', onclick: () => outputDialog(null, accounts, reload) }, '+ Add output')),
+      h('div', { class: 'card stack' }, streamLine, listEl),
+      h('div', { class: 'grid two', style: { marginTop: '16px' } },
+        h('div', { class: 'card stack' }, h('h2', null, 'Encoding'),
+          h('p', { class: 'muted', style: { margin: 0 } }, 'Each playout on air is encoded once and sent as is to every output routed to it. These settings apply to all of them.'),
+          h('div', { class: 'fields' },
+            field('Resolution', bind(out, 'resolutionMode', drawFixed, 'select', { options: [['playout', 'Follow the playout'], ['fixed', 'Fixed output size (scaled)']] }), { wide: true }),
+            h('div', { class: 'wide' }, fixedFields),
+            field('Frame rate', bind(out, 'fps', () => {}, 'select', { options: [['25', '25 fps'], ['30', '30 fps'], ['50', '50 fps'], ['60', '60 fps']] })),
+            field('Video bitrate (kbit/s)', bind(out, 'videoBitrate', () => {}, 'number', { min: 200 })),
+            field('Encoder', bind(out, 'encoder', () => {}, 'select', { options: [['libx264', 'CPU (x264)'], ['h264_vaapi', 'GPU: Intel/AMD (VAAPI)'], ['h264_nvenc', 'GPU: NVIDIA (NVENC)']] }),
+              { hint: hw.length ? `Detected: ${hw.join(', ')}` : 'No GPU detected in this container.' }),
+            field('x264 preset', bind(out, 'preset', () => {}, 'select', { options: ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium'].map((p) => [p, p]) }), { hint: 'Faster presets use less CPU.' }),
+            h('label', { class: 'check' }, bind(out, 'audio', () => {}, 'checkbox'), 'Send audio'),
+            field('Audio bitrate (kbit/s)', bind(out, 'audioBitrate', () => {}, 'number', { min: 32 }))),
+          h('div', { class: 'row' }, h('button', { class: 'primary', onclick: async () => {
+            try { await PUT('/api/output', { ...out, fps: Number(out.fps) }); toast(status.wanted ? 'Saved. The stream restarts with the new settings.' : 'Saved', 'ok'); } catch (err) { fail(err); }
+          } }, 'Save encoding'))),
+        h('div', { class: 'card stack' }, h('h2', null, 'Accounts'), accountsEl)));
+    drawAccounts();
+    await refresh();
+    const iv = setInterval(refresh, 3000);
+    cleanup = () => clearInterval(iv);
+  }
+
+
+  // ---------- outputs: routing ----------
+  const sourceLabel = (source, playouts) => {
+    if (!source || source === 'schedule') return 'Schedule';
+    const p = playouts.find((x) => x.id === source);
+    return p ? p.name : 'deleted playout';
+  };
+
+  // Which playout goes to which output: a matrix with one row per source and one column per output.
+  async function pageRouting(main) {
+    let [list, playouts, status, settings] = await Promise.all([GET('/api/outputs'), GET('/api/playouts'), GET('/api/stream'), GET('/api/settings')]);
+    const onAirEl = h('div');
+    const matrixEl = h('div', { class: 'route-wrap' });
+    const onAirNow = () => playouts.find((p) => p.id === settings.activePlayoutId);
+
+    function drawOnAir() {
+      const pipes = status.pipelines || [];
+      const outsFor = (source) => list.filter((o) => o.enabled && (o.source || 'schedule') === source);
+      put(onAirEl,
+        h('div', { class: 'row between' }, h('h2', { style: { margin: 0 } }, 'On air now'),
+          status.wanted ? h('button', { class: 'danger small', onclick: () => POST('/api/stream/stop').then(refresh).catch(fail) }, 'Stop stream')
+            : h('button', { class: 'primary small', onclick: () => POST('/api/stream/start').then(refresh).catch(fail) }, 'Start stream')),
+        !status.wanted ? h('p', { class: 'muted' }, 'The stream is stopped. When it starts, every playout below that an output is routed to goes on air.')
+          : !pipes.length ? h('p', { class: 'muted' }, 'Nothing is on air: no output is turned on.')
+            : h('div', { class: 'source-tiles' }, pipes.map((p) => {
+              const [cls, label] = { live: ['ok', 'Live'], starting: ['warn', 'Starting'], restarting: ['warn', 'Restarting'], error: ['err', 'Error'] }[p.state] || ['', p.state];
+              return h('div', { class: 'source-tile' },
+                h('div', { class: 'row between' }, h('b', null, p.label), h('span', { class: `badge ${cls}` }, h('span', { class: 'dot' }), label)),
+                p.source === 'schedule' ? h('small', { class: 'muted' }, `Now: ${p.playoutName || 'nothing scheduled'}`) : h('small', { class: 'muted' }, 'Fixed playout'),
+                h('small', { class: 'muted' }, [p.resolution, p.stats && p.stats.bitrate].filter(Boolean).join(' · ') || '—'),
+                h('div', { class: 'row', style: { gap: '4px', marginTop: '4px' } }, outsFor(p.source).map((o) => h('span', { class: `badge type-${o.type}` }, o.name))));
+            })),
+        status.wanted && pipes.length > 1 ? h('p', { class: 'hint' }, `${pipes.length} playouts are on air, each with its own renderer and encoder. Every extra playout adds roughly the CPU (or GPU) load of one stream.`) : null);
+    }
+
+    function drawMatrix() {
+      if (!list.length) { put(matrixEl, h('p', { class: 'muted' }, 'No outputs yet. ', h('a', { href: '#output' }, 'Add an output'), ' first.')); return; }
+      const live = new Set((status.pipelines || []).map((p) => p.source));
+      const now = onAirNow();
+      const sources = [
+        { id: 'schedule', name: 'Schedule', sub: `Follows the schedule · now ${now ? now.name : 'nothing'}` },
+        ...playouts.map((p) => ({ id: p.id, name: p.name, sub: `${p.width} x ${p.height}${p.id === settings.activePlayoutId ? ' · on the schedule now' : ''}` })),
+      ];
+      const choose = async (o, source) => {
+        if ((o.source || 'schedule') === source) return;
+        try { await PUT(`/api/outputs/${o.id}/source`, { source }); o.source = source; drawMatrix(); drawOnAir(); toast(`${o.name} now sends ${sourceLabel(source, playouts)}`, 'ok'); } catch (err) { fail(err); }
+      };
+      put(matrixEl, h('table', { class: 'route-table' },
+        h('thead', null, h('tr', null, h('th', null, 'Playout'), list.map((o) => h('th', { class: o.enabled ? '' : 'off', title: o.enabled ? '' : 'This output is turned off' },
+          h('div', null, o.name), h('span', { class: `badge type-${o.type}` }, OUTPUT_TYPES[o.type]))))),
+        h('tbody', null, sources.map((src) => h('tr', null,
+          h('td', null, h('div', { class: 'row', style: { gap: '6px' } }, h('b', null, src.name), status.wanted && live.has(src.id) ? h('span', { class: 'badge ok' }, h('span', { class: 'dot' }), 'On air') : null),
+            h('small', { class: 'muted' }, src.sub)),
+          list.map((o) => {
+            const on = (o.source || 'schedule') === src.id;
+            return h('td', { class: `route-cell ${o.enabled ? '' : 'off'}` },
+              h('button', { class: `route-dot ${on ? 'on' : ''}`, 'aria-pressed': String(on), title: on ? `${o.name} sends ${src.name}` : `Send ${src.name} to ${o.name}`, onclick: () => choose(o, src.id) }));
+          }))))));
+    }
+
+    async function refresh() {
+      try { [status, list, settings] = await Promise.all([GET('/api/stream'), GET('/api/outputs'), GET('/api/settings')]); } catch { return; }
+      drawOnAir();
+      drawMatrix();
+    }
+
+    main.append(h('div', { class: 'row between' }, h('h1', null, 'Routing'), h('a', { class: 'btn', href: '#output' }, 'Outputs')),
+      h('p', { class: 'muted', style: { marginTop: 0 } }, 'Choose which playout each output sends. Outputs on the same playout share one encoder. Clone a playout to make a variant, such as a clean feed without overlays, and route it to its own output.'),
+      h('div', { class: 'card stack' }, onAirEl),
+      h('div', { class: 'card stack', style: { marginTop: '16px' } }, h('h2', { style: { margin: 0 } }, 'Routing'), matrixEl,
+        h('p', { class: 'hint' }, 'Each output sends one playout. Turned-off outputs are dimmed; their routing is kept for when you turn them on.')));
+    drawOnAir();
+    drawMatrix();
+    const iv = setInterval(refresh, 4000);
+    cleanup = () => clearInterval(iv);
   }
 
   // ---------- settings ----------

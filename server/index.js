@@ -14,6 +14,8 @@ const stream = require('./stream');
 const updater = require('./updater');
 const backup = require('./backup');
 const stats = require('./stats');
+const outputs = require('./outputs');
+const providers = require('./providers');
 const http = require('http');
 const pkg = require('../package.json');
 
@@ -331,6 +333,16 @@ app.get('/api/feeds/:id/items', wrap(async (req, res) => {
   res.json(await feeds.getItems(feed, { force: req.query.force === '1' }));
 }));
 
+// A full copy of a playout (scenes, overlays, ad blocks and music) under a new name.
+app.post('/api/playouts/:id/clone', (req, res) => {
+  const src = store.get('playouts', req.params.id);
+  if (!src) return res.status(404).json({ error: 'Not found' });
+  const { id, createdAt, updatedAt, ...copy } = JSON.parse(JSON.stringify(src));
+  copy.name = String((req.body || {}).name || '').trim().slice(0, 80) || `${src.name} (copy)`;
+  // Ad blocks that take their scenes from the original keep doing so.
+  res.json(store.create('playouts', copy));
+});
+
 // Generic CRUD for feeds, playouts and schedule rules
 for (const col of ['feeds', 'playouts', 'schedule']) {
   app.get(`/api/${col}`, (req, res) => res.json(store.list(col)));
@@ -346,6 +358,11 @@ for (const col of ['feeds', 'playouts', 'schedule']) {
   });
   app.delete(`/api/${col}/:id`, (req, res) => {
     const item = store.remove(col, req.params.id);
+    if (item && col === 'playouts') {
+      // Outputs that sent this playout fall back to the schedule.
+      for (const o of store.list('outputs').filter((x) => x.source === req.params.id)) outputs.route(o.id, outputs.SCHEDULE).catch(() => {});
+      applyRouting();
+    }
     item ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' });
   });
 }
@@ -402,10 +419,7 @@ app.put('/api/output', wrap(async (req, res) => {
   const num = (v, min, max, d) => Math.min(max, Math.max(min, Math.round(Number(v)) || d));
   const width = num(b.width, 160, 7680, 1920);
   const height = num(b.height, 120, 4320, 1080);
-  const url = String(b.url || '').trim();
-  if (url && !/^(rtmps?|srt):\/\//i.test(url)) return res.status(400).json({ error: 'The destination must start with rtmp://, rtmps:// or srt://' });
   const out = store.setSection('output', {
-    url,
     resolutionMode: b.resolutionMode === 'fixed' ? 'fixed' : 'playout',
     width: width - (width % 2),
     height: height - (height % 2),
@@ -419,6 +433,117 @@ app.put('/api/output', wrap(async (req, res) => {
   if (stream.wanted) await stream.restart();
   res.json(out);
 }));
+// ---------- outputs ----------
+// Secrets (stream keys) are replaced by has* flags on the way out and kept when not sent back.
+function publicOutput(o) {
+  const { streamKey, youtubeStreamId, ...rest } = o;
+  return { ...rest, hasStreamKey: !!streamKey };
+}
+function cleanOutput(b, existing = {}) {
+  const type = ['custom', 'youtube', 'facebook'].includes(b.type) ? b.type : existing.type || 'custom';
+  const o = {
+    name: String(b.name ?? existing.name ?? '').trim().slice(0, 80) || 'Output',
+    type,
+    mode: type === 'custom' ? undefined : (b.mode === 'key' ? 'key' : 'account'),
+    url: type === 'custom' ? String(b.url ?? existing.url ?? '').trim() : undefined,
+    streamKey: b.streamKey !== undefined && b.streamKey !== '' ? String(b.streamKey).trim() : existing.streamKey,
+    accountId: b.accountId ?? existing.accountId ?? null,
+    facebookPageId: b.facebookPageId ?? existing.facebookPageId ?? null,
+    title: String(b.title ?? existing.title ?? '').slice(0, 100),
+    description: String(b.description ?? existing.description ?? '').slice(0, 5000),
+    privacy: ['public', 'unlisted', 'private'].includes(b.privacy) ? b.privacy : existing.privacy || 'unlisted',
+    enabled: b.enabled !== undefined ? !!b.enabled : existing.enabled !== undefined ? existing.enabled : true,
+    source: cleanSource(b.source !== undefined ? b.source : existing.source),
+  };
+  if (type === 'custom' && !/^(rtmps?|srt):\/\//i.test(o.url || '')) throw Object.assign(new Error('The destination must start with rtmp://, rtmps:// or srt://'), { status: 400 });
+  if (type !== 'custom' && o.mode === 'account' && o.accountId && !store.get('accounts', o.accountId)) throw Object.assign(new Error('Account not found'), { status: 400 });
+  // An account change means a new YouTube stream key.
+  if (existing.accountId && existing.accountId !== o.accountId) o.youtubeStreamId = null;
+  return o;
+}
+// 'schedule' (what is on air) or the id of a playout.
+function cleanSource(v) {
+  if (!v || v === outputs.SCHEDULE) return outputs.SCHEDULE;
+  if (!store.get('playouts', v)) throw Object.assign(new Error('Playout not found'), { status: 400 });
+  return v;
+}
+// Starts or stops pipelines for the current routing, then (re)starts the output when its source is on air.
+// Starting a new pipeline takes a few seconds, so this runs in the background.
+function applyRouting(id) {
+  if (!stream.wanted) return;
+  stream.sync().then(() => {
+    const o = id && store.get('outputs', id);
+    if (o && o.enabled && outputs.isFeeding(outputs.sourceOf(o)) && !outputs.running[o.id]) return outputs.startOutput(o.id);
+    return null;
+  }).catch((err) => console.error('Routing:', err.message));
+}
+app.get('/api/outputs', (req, res) => res.json(store.list('outputs').map(publicOutput)));
+app.get('/api/outputs/status', (req, res) => res.json(outputs.status()));
+app.post('/api/outputs', wrap(async (req, res) => {
+  const o = store.create('outputs', cleanOutput(req.body || {}));
+  applyRouting(o.id);
+  res.json(publicOutput(o));
+}));
+app.put('/api/outputs/:id', wrap(async (req, res) => {
+  const existing = store.get('outputs', req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+  const o = store.update('outputs', existing.id, cleanOutput(req.body || {}, existing));
+  // Restart a running output so it uses the new settings.
+  await outputs.stopOutput(o.id);
+  applyRouting(o.id);
+  res.json(publicOutput(o));
+}));
+app.post('/api/outputs/:id/enable', wrap(async (req, res) => {
+  if (!store.get('outputs', req.params.id)) return res.status(404).json({ error: 'Not found' });
+  await outputs.enable(req.params.id, !!(req.body || {}).enabled);
+  applyRouting(req.params.id);
+  res.json({ ok: true });
+}));
+// Routing: which playout an output sends.
+app.put('/api/outputs/:id/source', wrap(async (req, res) => {
+  if (!store.get('outputs', req.params.id)) return res.status(404).json({ error: 'Not found' });
+  await outputs.route(req.params.id, cleanSource((req.body || {}).source));
+  applyRouting(req.params.id);
+  res.json({ ok: true });
+}));
+app.delete('/api/outputs/:id', wrap(async (req, res) => {
+  await outputs.stopOutput(req.params.id);
+  store.remove('outputs', req.params.id);
+  applyRouting();
+  res.json({ ok: true });
+}));
+
+// Linked accounts and the API credentials to link them (admins only).
+const adminOnly = auth.requireRole('admin');
+app.get('/api/connections', adminOnly, (req, res) => {
+  const c = store.getSection('connections');
+  res.json({ googleClientId: c.googleClientId, facebookAppId: c.facebookAppId, hasGoogleClientSecret: !!c.googleClientSecret, hasFacebookClientToken: !!c.facebookClientToken });
+});
+app.put('/api/connections', adminOnly, (req, res) => {
+  const b = req.body || {};
+  const patch = {};
+  for (const k of ['googleClientId', 'googleClientSecret', 'facebookAppId', 'facebookClientToken']) if (b[k] !== undefined) patch[k] = String(b[k]).trim();
+  store.setSection('connections', patch);
+  res.json({ ok: true });
+});
+app.get('/api/accounts', (req, res) => res.json(store.list('accounts').map((a) => ({ id: a.id, provider: a.provider, name: a.name }))));
+app.delete('/api/accounts/:id', adminOnly, (req, res) => {
+  for (const o of store.list('outputs').filter((x) => x.accountId === req.params.id)) store.update('outputs', o.id, { accountId: null, youtubeStreamId: null });
+  store.remove('accounts', req.params.id);
+  res.json({ ok: true });
+});
+app.get('/api/accounts/:id/pages', wrap(async (req, res) => {
+  const account = store.get('accounts', req.params.id);
+  if (!account || account.provider !== 'facebook') return res.status(404).json({ error: 'Not found' });
+  res.json((await providers.facebookPages(account)).map(({ id, name }) => ({ id, name })));
+}));
+app.post('/api/accounts/link', adminOnly, wrap(async (req, res) => res.json(await providers.startLinking((req.body || {}).provider))));
+app.get('/api/accounts/link/:id', adminOnly, (req, res) => {
+  const st = providers.linkingStatus(req.params.id);
+  st ? res.json(st) : res.status(404).json({ error: 'This link request is no longer active' });
+});
+app.delete('/api/accounts/link/:id', adminOnly, (req, res) => { providers.cancelLinking(req.params.id); res.json({ ok: true }); });
+
 
 // Stream control
 app.get('/api/stream', (req, res) => res.json(stream.status()));
@@ -571,7 +696,8 @@ openServer(PORT).catch((err) => { console.error(`Cannot listen on port ${PORT}:`
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, async () => {
     stream.wanted = false;
-    await stream.killAll();
+    await outputs.stopAll();
+    await Promise.all(Object.values(stream.pipelines).map((p) => { p.wanted = false; return p.killAll(); }));
     process.exit(0);
   });
 }

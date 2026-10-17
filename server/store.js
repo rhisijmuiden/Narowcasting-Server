@@ -11,7 +11,7 @@ const DB_FILE = path.join(DATA_DIR, 'data.json');
 
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
-const COLLECTIONS = ['media', 'folders', 'feeds', 'playouts', 'schedule', 'users'];
+const COLLECTIONS = ['media', 'folders', 'feeds', 'playouts', 'schedule', 'users', 'outputs', 'accounts'];
 
 function defaults() {
   return {
@@ -21,6 +21,12 @@ function defaults() {
     playouts: [],
     schedule: [],
     users: [],
+    // Stream destinations: { name, type: custom|youtube|facebook, mode: account|key, url, streamKey, accountId, enabled, ... }
+    outputs: [],
+    // Linked YouTube / Facebook accounts with their tokens (never sent to the browser).
+    accounts: [],
+    // API credentials for linking accounts.
+    connections: { googleClientId: '', googleClientSecret: '', facebookAppId: '', facebookClientToken: '' },
     settings: {
       defaultPlayoutId: null,
       timezone: process.env.TZ || 'Europe/Amsterdam',
@@ -69,11 +75,16 @@ function load() {
 function merge(raw) {
   const base = defaults();
   const backup = raw.backup || {};
+  // Before multiple outputs there was one destination in output.url.
+  if (!raw.outputs && raw.output && raw.output.url) {
+    raw.outputs = [{ id: id(), name: 'Main stream', type: 'custom', url: raw.output.url, enabled: true, createdAt: new Date().toISOString() }];
+  }
   return {
     ...base,
     ...raw,
     settings: { ...base.settings, ...raw.settings },
     output: { ...base.output, ...raw.output },
+    connections: { ...base.connections, ...raw.connections },
     backup: {
       ...base.backup,
       ...backup,
