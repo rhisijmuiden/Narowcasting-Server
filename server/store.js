@@ -11,11 +11,12 @@ const DB_FILE = path.join(DATA_DIR, 'data.json');
 
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
-const COLLECTIONS = ['media', 'feeds', 'playouts', 'schedule', 'users'];
+const COLLECTIONS = ['media', 'folders', 'feeds', 'playouts', 'schedule', 'users'];
 
 function defaults() {
   return {
     media: [],
+    folders: [],
     feeds: [],
     playouts: [],
     schedule: [],

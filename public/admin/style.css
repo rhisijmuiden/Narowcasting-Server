@@ -102,6 +102,17 @@ th { font-size: 12px; color: var(--muted); font-weight: 600; }
 .media-item .thumb .kind { position: absolute; left: 6px; top: 6px; }
 .media-item .meta { padding: 8px 10px; }
 .media-item .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.media-item[draggable=true] { cursor: grab; }
+.folder-tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 10px 10px; cursor: pointer; min-width: 0; }
+.folder-tile:hover { border-color: var(--accent); }
+.folder-tile.over, .crumb.over { border-color: var(--accent); background: rgba(79,140,255,.12); }
+.folder-tile .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.folder-icon { width: 46px; height: 34px; margin-bottom: 8px; border-radius: 3px 6px 6px 6px; background: var(--warn); position: relative; opacity: .9; }
+.folder-icon::before { content: ""; position: absolute; left: 0; top: -6px; width: 20px; height: 8px; border-radius: 3px 3px 0 0; background: var(--warn); }
+.crumbs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; min-width: 0; }
+.crumbs .sep { color: var(--muted); padding: 0 2px; }
+.crumb { background: none; border: 1px solid transparent; padding: 4px 8px; color: var(--accent); }
+.crumb.cur { color: var(--text); font-weight: 600; }
 .progress { height: 4px; background: var(--panel-2); border-radius: 2px; overflow: hidden; }
 .progress > div { height: 100%; background: var(--accent); width: 0; transition: width .2s; }
 
