@@ -88,6 +88,7 @@
       }
       syncOverlays();
       syncMusic();
+      syncCameras();
       if (wake) wake();
     } catch (err) {
       console.error(err);
@@ -107,6 +108,23 @@
     overlay.node.style.background = 'transparent';
     overlayLayer.appendChild(overlay.node);
     overlay.show();
+  }
+
+  // Keeps a connection open to every camera the playout on air uses, so a camera scene starts
+  // with a picture straight away instead of waiting for the camera to connect.
+  const warm = new Map();
+  function syncCameras() {
+    const p = state.playout;
+    const els = p ? [...(p.overlays || []), ...(p.slides || []).flatMap((s) => s.elements || []), ...(p.adBlocks || []).flatMap((a) => a.slides.flatMap((s) => s.elements || []))] : [];
+    const want = new Set(els.filter((e) => e.type === 'camera' && e.src).map((e) => e.src));
+    for (const [src, img] of warm) if (!want.has(src)) { img.removeAttribute('src'); warm.delete(src); }
+    for (const src of want) {
+      if (warm.has(src)) continue;
+      const img = new Image();
+      img.onerror = () => setTimeout(() => { if (warm.get(src) === img) img.src = `${src}?warm=${Date.now()}`; }, 5000);
+      img.src = `${src}?warm=1`;
+      warm.set(src, img);
+    }
   }
 
   // Waits until load() brings new state (used when there is nothing to play).

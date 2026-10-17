@@ -11,7 +11,7 @@ const DB_FILE = path.join(DATA_DIR, 'data.json');
 
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
 
-const COLLECTIONS = ['media', 'folders', 'feeds', 'playouts', 'schedule', 'users', 'outputs', 'accounts'];
+const COLLECTIONS = ['media', 'folders', 'feeds', 'playouts', 'schedule', 'users', 'outputs', 'accounts', 'cameras'];
 
 function defaults() {
   return {
@@ -23,6 +23,8 @@ function defaults() {
     users: [],
     // Stream destinations: { name, type: custom|youtube|facebook, mode: account|key, url, streamKey, accountId, enabled, ... }
     outputs: [],
+    // IP cameras: { name, protocol: rtsp|rtmp|rtmps|rtp, url, username, password, transport, ignoreSsl, sdp, fps, maxWidth }
+    cameras: [],
     // Linked YouTube / Facebook accounts with their tokens (never sent to the browser).
     accounts: [],
     // API credentials for linking accounts.
