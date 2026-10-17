@@ -34,7 +34,9 @@ Open the shell of the container and run:
 update
 ```
 
-It fetches the latest version, installs it and restarts Beeldkrant, or tells you it is already up to date. Your playouts, media and settings in `/var/lib/beeldkrant` are kept. `update --force` reinstalls the current version. To follow another branch, put `BEELDKRANT_REF=<branch>` in `/etc/default/beeldkrant`.
+It fetches the latest version, installs it and restarts Beeldkrant, or tells you it is already up to date.
+
+The admin panel checks for a new version once a day. Admins then see a notice with an **Update now** button, which runs the same update; *Settings → Software update* has *Check now* and the update button too. The panel starts the update through the `beeldkrant-update.path` and `beeldkrant-update.service` systemd units, so the web server itself never needs root. Your playouts, media and settings in `/var/lib/beeldkrant` are kept. `update --force` reinstalls the current version. To follow another branch, put `BEELDKRANT_REF=<branch>` in `/etc/default/beeldkrant`.
 
 Useful overrides: `mode=default` skips the wizard, `var_gpu=no` turns GPU passthrough off, `BEELDKRANT_REF=<branch>` installs another branch.
 

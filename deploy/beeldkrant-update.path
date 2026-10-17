@@ -1,0 +1,10 @@
+# Starts the updater when the admin panel asks for an update (it creates the request file).
+[Unit]
+Description=Watch for Beeldkrant update requests
+
+[Path]
+PathExists=/var/lib/beeldkrant/update-request
+Unit=beeldkrant-update.service
+
+[Install]
+WantedBy=multi-user.target

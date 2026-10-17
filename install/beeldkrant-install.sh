@@ -74,6 +74,10 @@ customize
 
 # Our own `update` command (replaces the generic one customize() writes): updates Beeldkrant in place.
 install -m 0755 /opt/beeldkrant/scripts/update.sh /usr/bin/update
+# Lets the admin panel start that same update.
+install -m 0644 /opt/beeldkrant/deploy/beeldkrant-update.path /opt/beeldkrant/deploy/beeldkrant-update.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable -q --now beeldkrant-update.path
 [[ "$BEELDKRANT_REF" != "main" ]] && echo "BEELDKRANT_REF=$BEELDKRANT_REF" >/etc/default/beeldkrant
 
 cleanup_lxc
