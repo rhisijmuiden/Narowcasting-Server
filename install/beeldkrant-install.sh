@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs inside the new Debian 13 container; called by ct/beeldkrant.sh through the community-scripts engine.
 # License: MIT
-# Source: https://github.com/rhisijmuiden/narowcasting-server
+# Source: https://github.com/rhisijmuiden/TV-Channel-Generator
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -11,7 +11,7 @@ setting_up_container
 network_check
 update_os
 
-BEELDKRANT_REPO="${BEELDKRANT_REPO:-https://github.com/rhisijmuiden/narowcasting-server.git}"
+BEELDKRANT_REPO="${BEELDKRANT_REPO:-https://github.com/rhisijmuiden/TV-Channel-Generator.git}"
 BEELDKRANT_REF="${BEELDKRANT_REF:-main}"
 
 msg_info "Installing Dependencies"

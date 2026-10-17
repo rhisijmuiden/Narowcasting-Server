@@ -15,7 +15,7 @@ Contents: [Install](#install-on-proxmox-ve) · [Dashboard](#dashboard-and-statis
 Run this in the shell of a Proxmox node:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/rhisijmuiden/narowcasting-server/main/ct/beeldkrant.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/rhisijmuiden/TV-Channel-Generator/main/ct/beeldkrant.sh)"
 ```
 
 The script uses the [community-scripts](https://github.com/community-scripts/ProxmoxVE) engine (the same one behind `ct/debian.sh`) and opens the **advanced wizard** by default, so you choose:
@@ -232,7 +232,7 @@ On first start Beeldkrant creates the user `admin` with a random one-time passwo
 
 ```bash
 apt install -y git ffmpeg chromium xvfb pulseaudio fonts-dejavu fonts-noto-color-emoji nodejs npm
-git clone https://github.com/rhisijmuiden/narowcasting-server /opt/beeldkrant
+git clone https://github.com/rhisijmuiden/TV-Channel-Generator /opt/beeldkrant
 cd /opt/beeldkrant && npm ci --omit=dev
 DATA_DIR=/var/lib/beeldkrant node server/index.js
 ```

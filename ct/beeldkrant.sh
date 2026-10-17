@@ -3,13 +3,13 @@
 # (same engine as https://github.com/community-scripts/ProxmoxVE/blob/main/ct/debian.sh).
 #
 # Run in a Proxmox node shell:
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/rhisijmuiden/narowcasting-server/main/ct/beeldkrant.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/rhisijmuiden/TV-Channel-Generator/main/ct/beeldkrant.sh)"
 #
 # The engine fetches install/beeldkrant-install.sh from this repository instead of ProxmoxVE.
-export COMMUNITY_SCRIPTS_URL="${COMMUNITY_SCRIPTS_URL:-https://raw.githubusercontent.com/rhisijmuiden/narowcasting-server/main}"
+export COMMUNITY_SCRIPTS_URL="${COMMUNITY_SCRIPTS_URL:-https://raw.githubusercontent.com/rhisijmuiden/TV-Channel-Generator/main}"
 source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
 # License: MIT
-# Source: https://github.com/rhisijmuiden/narowcasting-server
+# Source: https://github.com/rhisijmuiden/TV-Channel-Generator
 
 APP="Beeldkrant"
 var_tags="${var_tags:-narrowcasting;streaming}"

@@ -77,6 +77,10 @@ if [[ -n "$RESTORE_DIR" ]]; then
 fi
 
 info "Checking for updates ($REF)"
+# The repository was renamed; GitHub redirects the old address, but point installs at the new one.
+case "$(git_ remote get-url origin 2>/dev/null)" in
+  *rhisijmuiden/narowcasting-server*) git_ remote set-url origin https://github.com/rhisijmuiden/TV-Channel-Generator.git ;;
+esac
 git_ fetch --quiet --depth 1 origin "$REF" || die "Could not reach the repository."
 CURRENT="$(git_ rev-parse HEAD)"
 LATEST="$(git_ rev-parse FETCH_HEAD)"
