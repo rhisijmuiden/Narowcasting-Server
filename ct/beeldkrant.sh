@@ -38,21 +38,13 @@ function update_script() {
     msg_error "No ${APP} Installation Found!"
     exit
   fi
-  msg_info "Stopping ${APP}"
-  systemctl stop beeldkrant
-  msg_ok "Stopped ${APP}"
-
-  msg_info "Updating ${APP}"
-  cd /opt/beeldkrant || exit
-  $STD git fetch --depth 1 origin "${BEELDKRANT_REF:-main}"
-  $STD git reset --hard FETCH_HEAD
-  $STD npm ci --omit=dev
-  chown -R beeldkrant:beeldkrant /opt/beeldkrant
-  msg_ok "Updated ${APP}"
-
-  msg_info "Starting ${APP}"
-  systemctl start beeldkrant
-  msg_ok "Started ${APP}"
+  # Same routine as the `update` command inside the container (fetched for installs that predate it).
+  local updater=/opt/beeldkrant/scripts/update.sh
+  if [[ ! -f "$updater" ]]; then
+    updater="$(mktemp)"
+    curl -fsSL "${COMMUNITY_SCRIPTS_URL}/scripts/update.sh" -o "$updater"
+  fi
+  bash "$updater" || exit
   msg_ok "Updated successfully!"
   exit
 }

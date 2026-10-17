@@ -26,7 +26,15 @@ At the end it prints the admin URL (`http://<container-ip>:8080`) and a **one-ti
 pct exec <CTID> -- cat /var/lib/beeldkrant/initial-admin-password
 ```
 
-Run the same command again inside the container (or choose *Update* in the menu) to update Beeldkrant to the latest version.
+### Updating
+
+Open the shell of the container and run:
+
+```bash
+update
+```
+
+It fetches the latest version, installs it and restarts Beeldkrant, or tells you it is already up to date. Your playouts, media and settings in `/var/lib/beeldkrant` are kept. `update --force` reinstalls the current version. To follow another branch, put `BEELDKRANT_REF=<branch>` in `/etc/default/beeldkrant`.
 
 Useful overrides: `mode=default` skips the wizard, `var_gpu=no` turns GPU passthrough off, `BEELDKRANT_REF=<branch>` installs another branch.
 
@@ -113,6 +121,7 @@ Environment variables:
 ```
 ct/beeldkrant.sh               Proxmox host script (creates the LXC)
 install/beeldkrant-install.sh  Runs inside the container
+scripts/update.sh              The `update` command inside the container
 server/                        Node.js server: API, auth, schedule, feeds, stream pipeline
 public/admin/                  Admin panel (plain JS, no build step)
 public/player/                 Player page and the shared scene renderer
