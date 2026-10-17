@@ -3,7 +3,7 @@
 (() => {
   'use strict';
 
-  const { renderSlide, feedItems, getJSON, sleep } = window.Beeldkrant;
+  const { base, renderSlide, feedItems, getJSON, sleep } = window.Beeldkrant;
   const params = new URLSearchParams(location.search);
   const forcedPlayout = params.get('playout');
   const stage = document.getElementById('stage');
@@ -278,7 +278,7 @@
   }
 
   function listen() {
-    const es = new EventSource('/api/player/events');
+    const es = new EventSource(`${base}/api/player/events`);
     let first = true;
     es.onmessage = () => { if (first) { first = false; return; } load(); };
     es.onerror = () => { es.close(); setTimeout(() => { listen(); load(); }, 5000); };

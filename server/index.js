@@ -18,6 +18,7 @@ const outputs = require('./outputs');
 const providers = require('./providers');
 const cameras = require('./cameras');
 const sso = require('./sso');
+const station = require('./station');
 const http = require('http');
 const QRCode = require('qrcode');
 const pkg = require('../package.json');
@@ -26,6 +27,8 @@ const pkg = require('../package.json');
 const PORT = Number(store.getSection('settings').port) || Number(process.env.PORT) || 8080;
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC = path.join(__dirname, '..', 'public');
+// The whole app can live under a path, e.g. /channel1 (station contract); '' is the root.
+const BASE = station.BASE_PATH;
 const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 2048;
 
 const IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
@@ -46,20 +49,15 @@ app.use(express.json({ limit: '2mb' }));
 // ---------- helpers ----------
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-function isLocal(req) {
-  const a = req.socket.remoteAddress || '';
-  return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
-}
-
 // The renderer (local Chromium) and logged-in admins (preview) may read player data.
 function playerAccess(req, res, next) {
-  if (isLocal(req) || auth.isAuthenticated(req)) return next();
+  if (station.isLocal(req) || auth.isAuthenticated(req)) return next();
   res.status(401).json({ error: 'Not allowed' });
 }
 
 function mediaUrl(m) {
   if (m.external) return m.url;
-  return `/media/${encodeURIComponent(m.filename)}`;
+  return `${BASE}/media/${encodeURIComponent(m.filename)}`;
 }
 
 function probe(file) {
@@ -86,8 +84,17 @@ function thumbnail(file, out) {
   });
 }
 
+// ---------- health ----------
+// Answers without a login, at the root and under the base path (station contract).
+function healthz(req, res) {
+  res.set('Cache-Control', 'no-store').json({ status: 'ok', app: 'beeldkrant', version: pkg.version, contract: station.CONTRACT });
+}
+app.get('/healthz', healthz);
+
 // ---------- auth ----------
 auth.bootstrap();
+// The service token of the station panel acts as an admin on the API.
+app.use('/api', auth.serviceToken);
 
 // Brute-force brake: a few wrong passwords per address and user name, then a pause.
 const failures = new Map(); // key -> { count, until }
@@ -110,7 +117,7 @@ app.get('/api/auth/options', (req, res) => {
 
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
-  const key = `${req.socket.remoteAddress}|${String(username || '').toLowerCase()}`;
+  const key = `${station.clientAddress(req)}|${String(username || '').toLowerCase()}`;
   const wait = throttled(key);
   if (wait) return res.status(429).json({ error: `Too many attempts. Try again in ${wait} s.` });
   const known = auth.findByName(username || '');
@@ -135,16 +142,16 @@ app.get('/api/qr', wrap(async (req, res) => {
 
 // Microsoft Entra sign-in.
 app.get('/api/sso/start', (req, res) => {
-  try { res.redirect(sso.startUrl(req)); } catch (err) { res.redirect(`/admin/?sso_error=${encodeURIComponent(err.message)}`); }
+  try { res.redirect(sso.startUrl(req)); } catch (err) { res.redirect(`${BASE}/admin/?sso_error=${encodeURIComponent(err.message)}`); }
 });
 app.get('/api/sso/callback', wrap(async (req, res) => {
   try {
     const user = await sso.callback(req);
     auth.finishLogin(res, user);
-    res.redirect('/admin/');
+    res.redirect(`${BASE}/admin/`);
   } catch (err) {
     console.error('Microsoft sign-in failed:', err.message);
-    res.redirect(`/admin/?sso_error=${encodeURIComponent(err.message)}`);
+    res.redirect(`${BASE}/admin/?sso_error=${encodeURIComponent(err.message)}`);
   }
 }));
 
@@ -189,8 +196,8 @@ function resolveElement(e) {
   if (e.type === 'camera' && e.cameraId) {
     const cam = store.get('cameras', e.cameraId);
     out.cameraName = cam ? cam.name : null;
-    out.src = cam ? `/api/player/camera/${cam.id}` : null;
-    out.snapshot = cam ? `/api/player/camera/${cam.id}/snapshot` : null;
+    out.src = cam ? `${BASE}/api/player/camera/${cam.id}` : null;
+    out.snapshot = cam ? `${BASE}/api/player/camera/${cam.id}/snapshot` : null;
   }
   return out;
 }
@@ -318,7 +325,7 @@ const upload = multer({
 });
 
 app.get('/api/media', (req, res) => {
-  res.json(store.list('media').map((m) => ({ ...m, url: mediaUrl(m), thumbUrl: m.thumb ? `/media/${encodeURIComponent(m.thumb)}` : m.type === 'image' ? mediaUrl(m) : null })));
+  res.json(store.list('media').map((m) => ({ ...m, url: mediaUrl(m), thumbUrl: m.thumb ? `${BASE}/media/${encodeURIComponent(m.thumb)}` : m.type === 'image' ? mediaUrl(m) : null })));
 });
 
 // External media: an audio web stream (Shoutcast/Icecast) used as background music.
@@ -946,12 +953,24 @@ app.get('/api/backups/download/:name', backupAccess, (req, res) => {
 
 // ---------- admin UI ----------
 app.use('/admin', express.static(path.join(PUBLIC, 'admin')));
-app.get('/', (req, res) => res.redirect('/admin/'));
+app.get('/', (req, res) => res.redirect(`${BASE}/admin/`));
 
 app.use((err, req, res, next) => {
   console.error(err);
   res.status(err.status || 400).json({ error: err.message || 'Something went wrong' });
 });
+
+// ---------- base path ----------
+// With a base path the app is mounted under it; outside it only /healthz answers. The reverse proxy
+// forwards the full path, so nothing needs rewriting. <base path> without the slash goes to <base path>/.
+let root = app;
+if (BASE) {
+  root = express();
+  root.disable('x-powered-by');
+  root.get('/healthz', healthz);
+  root.get(BASE, (req, res, next) => (req.path === BASE ? res.redirect(`${BASE}/${req.originalUrl.slice(BASE.length)}`) : next()));
+  root.use(BASE, app);
+}
 
 // ---------- listening ----------
 let server = null;
@@ -959,7 +978,7 @@ let listenPort = null;
 // Listens on `port`; when already listening elsewhere, the old port closes once the new one is open.
 function openServer(port) {
   return new Promise((resolve, reject) => {
-    const next = http.createServer(app);
+    const next = http.createServer(root);
     next.once('error', reject);
     next.listen(port, HOST, () => {
       next.removeListener('error', reject);
@@ -967,7 +986,7 @@ function openServer(port) {
       server = next;
       listenPort = port;
       stream.port = port;
-      console.log(`Beeldkrant ${pkg.version} admin panel on http://${HOST}:${port}/admin/`);
+      console.log(`Beeldkrant ${pkg.version} admin panel on http://${HOST}:${port}${BASE}/admin/`);
       if (old) {
         // Give the browser that asked for the change its answer before closing the old port.
         setTimeout(() => { old.close(); if (old.closeAllConnections) old.closeAllConnections(); }, 1500);

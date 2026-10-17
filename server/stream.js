@@ -15,6 +15,7 @@ const { EventEmitter } = require('events');
 const store = require('./store');
 const schedule = require('./schedule');
 const outputs = require('./outputs');
+const station = require('./station');
 
 const DISPLAY_BASE = Number(String(process.env.BK_DISPLAY || ':99').replace(':', '')) || 99;
 const PORT = Number(process.env.PORT) || 8080;
@@ -159,7 +160,7 @@ class Pipeline {
 
     // 3. Browser showing the player
     const profile = path.join(RUNTIME_DIR, this.slot ? `chromium-profile-${this.slot}` : 'chromium-profile');
-    const page = `http://127.0.0.1:${this.manager.port || PORT}/player/?output=1${this.source === outputs.SCHEDULE ? '' : `&playout=${encodeURIComponent(this.source)}`}`;
+    const page = `http://127.0.0.1:${this.manager.port || PORT}${station.BASE_PATH}/player/?output=1${this.source === outputs.SCHEDULE ? '' : `&playout=${encodeURIComponent(this.source)}`}`;
     this.spawnProc('chromium', tools.chromium, [
       '--no-sandbox', '--no-first-run', '--no-default-browser-check', '--disable-infobars', '--disable-session-crashed-bubble',
       '--disable-features=Translate,MediaRouter', '--autoplay-policy=no-user-gesture-required', '--disable-dev-shm-usage',
