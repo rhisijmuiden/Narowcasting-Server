@@ -8,7 +8,9 @@
 #     bash -c "$(wget -qO- https://raw.githubusercontent.com/rhisijmuiden/TV-Channel-Generator/main/install/debian.sh)"
 #
 # Settings (environment variables):
-#     BEELDKRANT_REF=<branch>   install another branch (default main)
+#     BEELDKRANT_CHANNEL=stable|test   release channel (default stable: the newest GitHub release;
+#                               test: every change on main). Can be changed later in the panel.
+#     BEELDKRANT_REF=<branch>   install and follow another branch instead of a channel
 #     PORT=<port>               port of the admin panel (default 8080)
 #     GPU=intel|amd|none        install VAAPI drivers for hardware H.264 encoding (default: detect)
 #
@@ -17,7 +19,8 @@
 set -euo pipefail
 
 BEELDKRANT_REPO="${BEELDKRANT_REPO:-https://github.com/rhisijmuiden/TV-Channel-Generator.git}"
-BEELDKRANT_REF="${BEELDKRANT_REF:-main}"
+BEELDKRANT_REF="${BEELDKRANT_REF:-}"
+BEELDKRANT_CHANNEL="${BEELDKRANT_CHANNEL:-stable}"
 PORT="${PORT:-8080}"
 GPU="${GPU:-auto}"
 APP_DIR=/opt/beeldkrant
@@ -74,15 +77,24 @@ install -d -o beeldkrant -g beeldkrant "$DATA_DIR"
 for grp in video render; do getent group "$grp" >/dev/null && usermod -aG "$grp" beeldkrant; done
 ok "Created service user"
 
-info "Installing Beeldkrant ($BEELDKRANT_REF)"
-git clone --quiet --depth 1 --branch "$BEELDKRANT_REF" "$BEELDKRANT_REPO" "$APP_DIR"
+# What to install: the pinned branch, the newest release (stable) or main (test, or no release yet).
+[[ "$BEELDKRANT_CHANNEL" == "test" ]] || BEELDKRANT_CHANNEL="stable"
+CLONE_REF="$BEELDKRANT_REF"
+if [[ -z "$CLONE_REF" && "$BEELDKRANT_CHANNEL" == "stable" ]]; then
+  CLONE_REF="$(git ls-remote --tags --refs "$BEELDKRANT_REPO" 'refs/tags/v*' | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+fi
+CLONE_REF="${CLONE_REF:-main}"
+info "Installing Beeldkrant ($CLONE_REF, ${BEELDKRANT_REF:+branch }${BEELDKRANT_REF:-$BEELDKRANT_CHANNEL channel})"
+git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$CLONE_REF" "$BEELDKRANT_REPO" "$APP_DIR"
+echo "$BEELDKRANT_CHANNEL" >"$DATA_DIR/update-channel"
+chown beeldkrant:beeldkrant "$DATA_DIR/update-channel"
 (cd "$APP_DIR" && npm ci --omit=dev --no-audit --no-fund --loglevel=error)
 chown -R beeldkrant:beeldkrant "$APP_DIR"
 ok "Installed Beeldkrant"
 
 info "Creating service"
 {
-  [[ "$BEELDKRANT_REF" != "main" ]] && echo "BEELDKRANT_REF=$BEELDKRANT_REF"
+  [[ -n "$BEELDKRANT_REF" ]] && echo "BEELDKRANT_REF=$BEELDKRANT_REF"
   [[ "$PORT" != "8080" ]] && echo "PORT=$PORT"
   true
 } >/etc/default/beeldkrant

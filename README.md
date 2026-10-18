@@ -38,18 +38,30 @@ Open the shell of the container and run:
 update
 ```
 
-It fetches the latest version, installs it and restarts Beeldkrant, or tells you it is already up to date.
+It fetches the latest version of your release channel, installs it and restarts Beeldkrant, or tells you it is already up to date.
 
-The admin panel checks for a new version once a day. Admins then see a notice with an **Update now** button, which runs the same update; The **Info** button at the bottom left of the menu shows the version, build and changelog (and what a new version brings), with *Check now* and the update button. Before updating, the panel offers to make a local backup of the application and database, optionally with the media; the update only starts when that backup succeeded. The panel starts the update through the `beeldkrant-update.path` and `beeldkrant-update.service` systemd units, so the web server itself never needs root. Your playouts, media and settings in `/var/lib/beeldkrant` are kept. `update --force` reinstalls the current version. To follow another branch, put `BEELDKRANT_REF=<branch>` in `/etc/default/beeldkrant`.
+#### Release channels
+
+Under *Info → Software update* an admin picks the release channel:
+
+- **Stable** (default, production): only published releases. A release is a [GitHub release](https://github.com/rhisijmuiden/TV-Channel-Generator/releases) with a tag like `v0.9.0`; publish one to put the current `main` on Stable. As long as no release exists, Stable follows the latest changes.
+- **Test**: every change as soon as it is merged into `main`, before it becomes a release. Use it on a test machine to try new features.
+
+The update check, the notice, *Update now* and the `update` command all follow the chosen channel. Going from Test back to Stable never installs an older version: Beeldkrant stays where it is and moves to Stable with the next release that is newer. The choice is kept in `/var/lib/beeldkrant/update-channel`.
+
+<img src="docs/screenshots/release-channel.png" alt="Software update card with the release channel set to Test" width="49%">
+
+
+The admin panel checks for a new version once a day. Admins then see a notice with an **Update now** button, which runs the same update; The **Info** button at the bottom left of the menu shows the version, build and changelog (and what a new version brings), with *Check now* and the update button. Before updating, the panel offers to make a local backup of the application and database, optionally with the media; the update only starts when that backup succeeded. The panel starts the update through the `beeldkrant-update.path` and `beeldkrant-update.service` systemd units, so the web server itself never needs root. Your playouts, media and settings in `/var/lib/beeldkrant` are kept. `update --force` reinstalls the current version. To follow another branch instead of a channel, put `BEELDKRANT_REF=<branch>` in `/etc/default/beeldkrant`.
 
 Before an update the panel asks whether to make a local backup first:
 
 <p>
-  <img src="docs/screenshots/info.png" alt="Info page with the version, build and changelog" width="49%">
+  <img src="docs/screenshots/info.png" alt="Info page with the version, build, release channel and changelog" width="49%">
   <img src="docs/screenshots/update-dialog.png" alt="Update dialog with the backup options" width="49%">
 </p>
 
-Useful overrides: `mode=default` skips the wizard, `var_gpu=no` turns GPU passthrough off, `BEELDKRANT_REF=<branch>` installs another branch.
+Useful overrides: `mode=default` skips the wizard, `var_gpu=no` turns GPU passthrough off, `BEELDKRANT_REF=<branch>` installs another branch. The container starts on the newest release (Stable); switch to Test in the panel.
 
 ## How it works
 
@@ -352,7 +364,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/rhisijmuiden/TV-Channel-
 
 Without curl, use `wget -qO-` instead of `curl -fsSL`. The installer asks nothing: it installs the packages (Chromium, ffmpeg, Xvfb, PulseAudio, fonts and Debian's Node.js), Beeldkrant in `/opt/beeldkrant` with its data in `/var/lib/beeldkrant`, the systemd service and the `update` command, and prints the admin address and the one-time password at the end. Running it again on an installed machine runs `update`.
 
-Settings: `PORT=<port>` changes the panel port, `BEELDKRANT_REF=<branch>` installs another branch, and `GPU=intel`, `GPU=amd` or `GPU=none` chooses the VAAPI drivers for hardware encoding (by default the installer looks for a GPU passed through to the machine). NVIDIA is only supported in the LXC container for now.
+Settings: `PORT=<port>` changes the panel port, `BEELDKRANT_CHANNEL=test` installs the latest changes instead of the newest release (see [Release channels](#release-channels)), `BEELDKRANT_REF=<branch>` installs another branch, and `GPU=intel`, `GPU=amd` or `GPU=none` chooses the VAAPI drivers for hardware encoding (by default the installer looks for a GPU passed through to the machine). NVIDIA is only supported in the LXC container for now.
 
 By hand, without the installer:
 

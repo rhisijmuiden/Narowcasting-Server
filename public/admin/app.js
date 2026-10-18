@@ -262,7 +262,8 @@
       const u = await GET('/api/system/update');
       if (!u.available) return;
       main.prepend(h('div', { class: 'update-banner' },
-        h('span', null, h('b', null, 'A new version of Beeldkrant is available.'), ` You run ${u.commit.slice(0, 7)}, the latest is ${u.latest.slice(0, 7)}.`),
+        h('span', null, h('b', null, u.latestVersion ? `Beeldkrant ${u.latestVersion} is available.` : 'A new version of Beeldkrant is available.'),
+          u.latestVersion ? ` You run ${u.version}.` : ` You run ${u.commit.slice(0, 7)}, the latest is ${u.latest.slice(0, 7)}.`),
         u.canUpdate ? h('button', { class: 'primary small', onclick: () => runUpdate(u) }, 'Update now') : h('span', { class: 'muted' }, 'Run update in the container shell.')));
     } catch { /* not important enough to show an error */ }
   }
@@ -318,15 +319,38 @@
     }
   }
 
+  const CHANNEL_INFO = {
+    stable: ['Stable', 'Production: only published releases. Recommended for screens on air.'],
+    test: ['Test', 'Every change as soon as it is merged, before it becomes a release. For trying out new features.'],
+  };
+  const versionLabel = (u) => u.latestVersion ? `version ${u.latestVersion}` : (u.latest || '').slice(0, 7);
+
   async function updateCard() {
     const box = h('div', { class: 'card stack' });
+    const setChannel = async (c, u) => {
+      if (c === u.channel) return;
+      try {
+        const next = await PUT('/api/system/update/channel', { channel: c });
+        toast(`Release channel: ${CHANNEL_INFO[c][0]}`, 'ok');
+        draw(next);
+      } catch (err) { fail(err); }
+    };
+    const channelPicker = (u) => h('div', { class: 'stack release-channel' },
+      h('div', { class: 'label' }, 'Release channel'),
+      u.pinned
+        ? h('div', { class: 'hint' }, `Pinned to branch ${u.pinned} (BEELDKRANT_REF in /etc/default/beeldkrant). Remove that line to choose a release channel.`)
+        : [h('div', { class: 'seg' }, ...Object.entries(CHANNEL_INFO).map(([c, [label]]) => h('button', { class: u.channel === c ? 'active' : '', onclick: () => setChannel(c, u) }, label))),
+          h('div', { class: 'hint' }, CHANNEL_INFO[u.channel][1]),
+          u.channel === 'stable' && u.stableFallback ? h('div', { class: 'hint' }, 'No stable release has been published yet, so Stable follows the latest changes for now.') : null,
+          u.channel === 'stable' && u.aheadOfStable ? h('div', { class: 'hint' }, `You run a test version (${u.version}) that is newer than the latest stable release (${u.latestVersion}). Beeldkrant stays on this version and moves to Stable with the next stable release.`) : null]);
     const draw = (u) => put(box,
       h('h2', null, 'Software update'),
-      h('div', null, 'Version ', h('b', null, u.version || '?'), u.commit ? h('span', { class: 'muted' }, ` (${u.commit.slice(0, 7)}, branch ${u.branch})`) : null),
+      h('div', null, 'Version ', h('b', null, u.version || '?'), u.commit ? h('span', { class: 'muted' }, ` (${u.commit.slice(0, 7)}, ${u.pinned ? `branch ${u.pinned}` : `${CHANNEL_INFO[u.channel][0].toLowerCase()} channel`})`) : null),
       u.error ? h('div', { class: 'badge err' }, u.error)
-        : u.available ? h('div', { class: 'badge warn' }, `New version available: ${u.latest.slice(0, 7)}`)
+        : u.available ? h('div', { class: 'badge warn' }, `New version available: ${versionLabel(u)}`)
           : u.checkedAt ? h('div', { class: 'badge ok' }, 'Up to date') : null,
       h('div', { class: 'hint' }, u.checkedAt ? `Last checked ${new Date(u.checkedAt).toLocaleString()}. Checked automatically once a day.` : 'Checked automatically once a day.'),
+      channelPicker(u),
       h('div', { class: 'row' },
         h('button', { onclick: async () => { try { draw(await POST('/api/system/update/check')); } catch (err) { fail(err); } } }, 'Check now'),
         u.canUpdate ? h('button', { class: u.available ? 'primary' : '', onclick: () => runUpdate(u) }, u.available ? 'Update now' : 'Reinstall latest') : null),
@@ -2672,7 +2696,8 @@
         h('div', { class: 'card stack' }, h('h2', null, 'Build'),
           h('table', { class: 'kv' },
             row('Version', h('b', null, info.version || '?')),
-            row('Build', info.commit ? `${info.commit.slice(0, 7)} on branch ${info.branch}` : 'Not a git checkout'),
+            row('Build', info.commit ? `${info.commit.slice(0, 7)}${info.pinned ? ` on branch ${info.pinned}` : ''}` : 'Not a git checkout'),
+            row('Release channel', info.pinned ? `Pinned to branch ${info.pinned}` : CHANNEL_INFO[info.channel][0]),
             row('Build date', info.builtAt ? new Date(info.builtAt).toLocaleString() : '—'),
             row('Node.js', info.node),
             row('Running for', fmtDuration(info.uptime)),
