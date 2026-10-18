@@ -12,7 +12,10 @@ network_check
 update_os
 
 BEELDKRANT_REPO="${BEELDKRANT_REPO:-https://github.com/rhisijmuiden/TV-Channel-Generator.git}"
-BEELDKRANT_REF="${BEELDKRANT_REF:-main}"
+BEELDKRANT_REF="${BEELDKRANT_REF:-}"
+# Release channel: stable installs the newest GitHub release, test follows main (changeable in the panel).
+BEELDKRANT_CHANNEL="${BEELDKRANT_CHANNEL:-stable}"
+[[ "$BEELDKRANT_CHANNEL" == "test" ]] || BEELDKRANT_CHANNEL="stable"
 
 msg_info "Installing Dependencies"
 $STD apt-get install -y \
@@ -34,7 +37,13 @@ setup_hwaccel "beeldkrant"
 for grp in video render; do getent group "$grp" >/dev/null && usermod -aG "$grp" beeldkrant; done
 
 msg_info "Installing Beeldkrant"
-$STD git clone --depth 1 --branch "$BEELDKRANT_REF" "$BEELDKRANT_REPO" /opt/beeldkrant
+CLONE_REF="$BEELDKRANT_REF"
+if [[ -z "$CLONE_REF" && "$BEELDKRANT_CHANNEL" == "stable" ]]; then
+  CLONE_REF="$(git ls-remote --tags --refs "$BEELDKRANT_REPO" 'refs/tags/v*' | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+fi
+$STD git -c advice.detachedHead=false clone --depth 1 --branch "${CLONE_REF:-main}" "$BEELDKRANT_REPO" /opt/beeldkrant
+echo "$BEELDKRANT_CHANNEL" >/var/lib/beeldkrant/update-channel
+chown beeldkrant:beeldkrant /var/lib/beeldkrant/update-channel
 cd /opt/beeldkrant || exit
 $STD npm ci --omit=dev
 chown -R beeldkrant:beeldkrant /opt/beeldkrant
@@ -57,6 +66,6 @@ install -m 0755 /opt/beeldkrant/scripts/station.sh /usr/bin/beeldkrant-station
 install -m 0644 /opt/beeldkrant/deploy/beeldkrant-update.path /opt/beeldkrant/deploy/beeldkrant-update.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable -q --now beeldkrant-update.path
-[[ "$BEELDKRANT_REF" != "main" ]] && echo "BEELDKRANT_REF=$BEELDKRANT_REF" >/etc/default/beeldkrant
+[[ -n "$BEELDKRANT_REF" ]] && echo "BEELDKRANT_REF=$BEELDKRANT_REF" >/etc/default/beeldkrant
 
 cleanup_lxc

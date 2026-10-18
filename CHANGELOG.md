@@ -2,6 +2,13 @@
 
 All notable changes to Beeldkrant. The admin panel shows this file under the Info button.
 
+## 0.9.0 (2026-10-18)
+
+### Added
+- Release channels under Info → Software update: **Stable** gets only published releases (GitHub releases with a `vX.Y.Z` tag) and is the default; **Test** gets every change as soon as it is merged. The update check, the update notice, *Update now* and the `update` command all follow the chosen channel. As long as no release has been published, Stable follows the latest changes.
+- Switching from Test back to Stable never installs an older version: Beeldkrant stays on its version and moves over with the next stable release.
+- Both installers install the newest release by default; the Debian installer takes `BEELDKRANT_CHANNEL=test` to install the latest changes instead. `BEELDKRANT_REF=<branch>` still pins a branch and overrides the channel.
+
 ## 0.8.0 (2026-10-17)
 
 ### Added

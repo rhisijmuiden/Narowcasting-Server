@@ -858,6 +858,8 @@ app.post('/api/stream/restart', wrap(async (req, res) => { await stream.restart(
 // Software updates (admins only)
 app.get('/api/system/update', wrap(async (req, res) => res.json({ ...(await updater.status()), prepare })));
 app.post('/api/system/update/check', auth.requireRole('admin'), wrap(async (req, res) => res.json(await updater.check())));
+// Release channel: stable (GitHub releases) or test (every change on main).
+app.put('/api/system/update/channel', auth.requireRole('admin'), wrap(async (req, res) => res.json({ ...(await updater.setChannel((req.body || {}).channel)), prepare })));
 // An update can first make a local backup of the application and database (and optionally the
 // media); `prepare` reports on that step until the update itself is requested.
 let prepare = null;
