@@ -370,7 +370,7 @@
     '-',
     ['library', 'Media management', [
       ['media', 'Media folders', [['media/video', 'Video'], ['media/audio', 'Audio'], ['media/ads', 'Ads']]],
-      ['feeds', 'RSS feeds'],
+      ['feeds', 'Feeds'],
       ['streams', 'Input streams'],
       ['cameras', 'IP cameras'],
     ], { dropdown: true }],
@@ -700,6 +700,12 @@
     camera: '<path d="M3 7h3l2-3h8l2 3h3v13H3z"/><circle cx="12" cy="13" r="4"/>',
     webpage: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
     box: '<rect x="4" y="4" width="16" height="16" rx="3"/>',
+    qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 17h4v4h-4"/>',
+    countdown: '<path d="M10 2h4M12 14l3-3"/><circle cx="12" cy="14" r="8"/>',
+    agenda: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18M7 14h4M7 17h7"/>',
+    departures: '<rect x="5" y="3" width="14" height="14" rx="3"/><path d="M5 11h14M8 21l1.5-4M16 21l-1.5-4M8.5 14h.01M15.5 14h.01"/>',
+    livestream: '<circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19 5a10 10 0 0 1 0 14M5 19A10 10 0 0 1 5 5"/>',
+    social: '<rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><path d="M17.5 6.5h.01"/>',
     plus: 'M12 5v14M5 12h14',
     trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>',
     copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
@@ -742,10 +748,26 @@
     weather: { label: 'Weather', w: 520, h: 360, defaults: { lat: 52.37, lon: 4.9, label: 'Amsterdam', fontSize: 56, color: '#ffffff' } },
     camera: { label: 'IP camera', w: 960, h: 540, defaults: { cameraId: null, fit: 'cover' } },
     webpage: { label: 'Web page', w: 1280, h: 720, defaults: { url: 'https://', zoom: 100 } },
+    qr: { label: 'QR code', w: 360, h: 420, defaults: { text: 'https://', caption: 'Scan me', color: '#000000', background: '#ffffff', fontSize: 32, padding: 16, margin: 1 } },
+    countdown: { label: 'Countdown', w: 1000, h: 300, defaults: { mode: 'date', target: '', time: '09:00', label: 'Starts in', doneText: 'It has started!', style: 'blocks', fontSize: 96, color: '#ffffff', accent: 'rgba(255,255,255,0.12)' } },
+    agenda: { label: 'Agenda', w: 900, h: 860, defaults: { feedId: null, layout: 'list', maxItems: 8, fontSize: 36, color: '#ffffff', accent: '#4f8cff', cardBackground: 'rgba(0,0,0,0.35)', showLocation: true, groupByDay: true } },
+    departures: { label: 'Departures', w: 1200, h: 720, defaults: { stopId: null, stopName: '', maxRows: 8, timeFormat: 'relative', modes: [], fontSize: 40, color: '#ffffff', headBackground: '#1f3c88', background: 'rgba(0,0,0,0.6)', showPlatform: true } },
+    livestream: { label: 'Live stream', w: 960, h: 540, defaults: { url: '', fit: 'contain', audio: false } },
+    social: { label: 'Social feed', w: 900, h: 900, defaults: { feedId: null, layout: 'single', perPage: 4, columns: 3, interval: 10, fontSize: 40, descLines: 5, color: '#ffffff', cardBackground: 'rgba(0,0,0,0.45)', gap: 20, showImage: true, showDate: true } },
     box: { label: 'Box', w: 600, h: 300, defaults: { background: 'rgba(0,0,0,0.5)', radius: 16 } },
   };
+  // Kinds of feed (Media management → Feeds); calendars feed agenda elements, social feeds social elements.
+  const FEED_KINDS = { rss: 'RSS', ical: 'iCal', outlook: 'Outlook', instagram: 'Instagram', facebook: 'Facebook' };
+  const CALENDAR_KINDS = ['ical', 'outlook'];
+  const SOCIAL_KINDS = ['instagram', 'facebook'];
+  const TRANSIT_MODES = [['train', 'Train'], ['metro', 'Metro'], ['tram', 'Tram'], ['bus', 'Bus'], ['ferry', 'Ferry']];
   // How the "Add" toolbar of the editor groups the element types.
-  const TOOL_GROUPS = [['Text and info', ['text', 'ticker', 'clock', 'weather', 'rss']], ['Media', ['image', 'video', 'slideshow', 'playlist', 'camera']], ['Other', ['box', 'webpage']]];
+  const TOOL_GROUPS = [
+    ['Text and info', ['text', 'ticker', 'clock', 'countdown', 'weather', 'rss']],
+    ['Media', ['image', 'video', 'slideshow', 'playlist', 'camera', 'livestream']],
+    ['Live data', ['agenda', 'departures', 'social', 'qr']],
+    ['Other', ['box', 'webpage']],
+  ];
   const TRANSITIONS = ['fade', 'crossfade', 'cut', 'slide-left', 'slide-right', 'slide-up', 'slide-down', 'zoom', 'wipe', 'wipe-down', 'circle', 'blur'];
   const DAY_LABELS = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
 
@@ -776,7 +798,10 @@
     playout.adBlocks = playout.adBlocks || [];
     playout.music = playout.music || { mediaId: null, volume: 60, duck: 15 };
     const mediaById = Object.fromEntries(media.map((m) => [m.id, m]));
-    const feedOptions = [['', '— choose a feed —'], ...feeds.map((f) => [f.id, f.name])];
+    const feedLabel = (f) => (f.kind && f.kind !== 'rss' ? `${f.name} (${FEED_KINDS[f.kind] || f.kind})` : f.name);
+    const feedOptions = [['', '— choose a feed —'], ...feeds.map((f) => [f.id, feedLabel(f)])];
+    const calendarOptions = [['', '— choose a calendar —'], ...feeds.filter((f) => CALENDAR_KINDS.includes(f.kind)).map((f) => [f.id, feedLabel(f)])];
+    const socialOptions = [['', '— choose a feed —'], ...feeds.filter((f) => SOCIAL_KINDS.includes(f.kind)).map((f) => [f.id, feedLabel(f)])];
 
     const S = { slideIndex: playout.slides.length ? 0 : -1, mode: 'slide', selected: null };
     const saveBtn = h('button', { class: 'primary', title: 'Save (Ctrl+S)', onclick: save }, icon('save'), 'Save');
@@ -919,8 +944,9 @@
       const m = e.mediaId && mediaById[e.mediaId];
       const feed = e.feedId && feeds.find((f) => f.id === e.feedId);
       const detail = e.type === 'text' ? String(e.text || '').split('\n')[0] : m ? m.name : e.type === 'image' && e.source === 'feed' ? 'feed image'
-        : e.items ? `${e.items.length} item${e.items.length === 1 ? '' : 's'}` : e.type === 'rss' && feed ? feed.name
-          : e.type === 'camera' ? ((cams.find((c) => c.id === e.cameraId) || {}).name || '') : '';
+        : e.items ? `${e.items.length} item${e.items.length === 1 ? '' : 's'}` : feed ? feed.name
+          : e.type === 'camera' ? ((cams.find((c) => c.id === e.cameraId) || {}).name || '')
+            : e.type === 'departures' ? e.stopName || '' : e.type === 'qr' || e.type === 'countdown' ? e.caption || e.label || '' : '';
       return detail ? `${label}: ${detail.slice(0, 24)}` : label;
     }
 
@@ -1156,7 +1182,7 @@
           h('h3', null, 'RSS template'),
           h('p', { class: 'hint' }, 'Link a feed to turn this scene into a template: it is shown once per feed item. Use {{title}}, {{description}}, {{date}} and {{feed}} in text, and an image set to "Feed item image".'),
           h('div', { class: 'fields' },
-            field('Feed', bind(sl, 'feedId', () => { feedPreview = {}; changedSide(); }, 'select', { options: [['', 'None (plain scene)'], ...feeds.map((f) => [f.id, f.name])] }), { wide: true }),
+            field('Feed', bind(sl, 'feedId', () => { feedPreview = {}; changedSide(); }, 'select', { options: [['', 'None (plain scene)'], ...feeds.map((f) => [f.id, feedLabel(f)])] }), { wide: true }),
             field('Number of items', bind(sl, 'feedMaxItems', changed, 'number', { min: 1, max: 50, placeholder: '5' }))),
           h('h3', null, 'Time window'),
           h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!sl.window, onchange: (ev) => { sl.window = ev.target.checked ? { days: [], start: '08:00', end: '18:00' } : null; changedSide(); renderProps(); } }), 'Only show this scene at certain times'),
@@ -1256,6 +1282,31 @@
         random && rows.length > 1 ? h('p', { class: 'hint' }, 'Random: the order changes every round, and no item plays twice in a row.') : null);
     }
 
+    // Searches public transport stops by name for a departure board.
+    function stopPicker(e, rerender) {
+      const results = h('div', { class: 'stop-results' });
+      let timer;
+      const search = h('input', { type: 'search', placeholder: 'Search a stop or station, e.g. Utrecht Centraal', oninput: () => {
+        clearTimeout(timer);
+        const q = search.value.trim();
+        if (q.length < 2) { put(results); return; }
+        timer = setTimeout(async () => {
+          put(results, h('p', { class: 'muted' }, 'Searching…'));
+          try {
+            const stops = await GET(`/api/transit/stops?q=${encodeURIComponent(q)}`);
+            put(results, stops.length ? stops.map((st) => h('button', { class: 'stop-result', onclick: () => {
+              Object.assign(e, { stopId: st.id, stopName: st.name });
+              markDirty(); drawCanvas(); renderSide(); rerender();
+            } }, h('b', null, st.name), h('small', { class: 'muted' }, [st.area, st.modes.filter((m) => m !== 'other').join(', ')].filter(Boolean).join(' · ')))) : h('p', { class: 'muted' }, 'No stops found.'));
+          } catch (err) { put(results, h('div', { class: 'badge err' }, err.message)); }
+        }, 350);
+      } });
+      return h('div', { class: 'stack' },
+        h('div', { class: 'field wide' }, h('span', { class: 'field-title' }, 'Stop or station'),
+          e.stopId ? h('div', { class: 'row between' }, h('b', null, e.stopName || e.stopId), h('button', { class: 'small', onclick: () => { Object.assign(e, { stopId: null, stopName: '' }); markDirty(); drawCanvas(); rerender(); } }, 'Change')) : search),
+        e.stopId ? null : results);
+    }
+
     function elementProps(e, changed) {
       const t = ELEMENT_TYPES[e.type] || { label: e.type };
       const rerender = () => { changed(); renderProps(); };
@@ -1325,7 +1376,7 @@
         case 'rss': {
           const feed = feeds.find((f) => f.id === e.feedId);
           out.push(h('div', { class: 'fields' },
-            field('Feed', bind(e, 'feedId', () => { feedPreview = {}; rerender(); renderSide(); }, 'select', { options: feedOptions }), { wide: true, hint: feed ? `This feed shows its ${feed.maxItems || 10} newest items (set under Media management → RSS feeds).` : 'Add feeds under Media management → RSS feeds.' }),
+            field('Feed', bind(e, 'feedId', () => { feedPreview = {}; rerender(); renderSide(); }, 'select', { options: feedOptions }), { wide: true, hint: feed ? `This feed shows its ${feed.maxItems || 10} newest items (set under Media management → Feeds).` : 'Add feeds under Media management → Feeds.' }),
             field('Layout', bind(e, 'layout', rerender, 'select', { options: [['list', 'List: photo left, text right'], ['grid', 'Grid of cards'], ['single', 'One item at a time, photo full size']] }), { wide: true }),
             e.layout === 'single' ? null : field('Items per page', bind(e, 'perPage', changed, 'number', { min: 1, max: 24, placeholder: e.layout === 'grid' ? '6' : '4' })),
             e.layout === 'grid' ? field('Columns', bind(e, 'columns', changed, 'number', { min: 1, max: 8, placeholder: '3' })) : null,
@@ -1381,6 +1432,106 @@
             field('Fit', bind(e, 'fit', changed, 'select', { options: [['cover', 'Fill (crop)'], ['contain', 'Fit (letterbox)'], ['fill', 'Stretch']] }))),
           h('p', { class: 'hint' }, cams.length ? 'Shows the camera live on air; the editor shows one picture. Add cameras under Media management → IP cameras.' : 'No cameras yet: add them under Media management → IP cameras.'));
           break;
+        case 'qr':
+          out.push(h('div', { class: 'fields' },
+            field('Link or text', bind(e, 'text', changed, 'textarea'), { wide: true, hint: 'In an RSS scene, {{link}} gives a code for each feed item.' }),
+            field('Caption', bind(e, 'caption', changed, 'text', { placeholder: 'e.g. Scan for the menu' }), { wide: true }),
+            field('Code colour', bind(e, 'color', changed, 'color', { fallback: '#000000' })),
+            field('Background', bind(e, 'background', changed, 'color', { fallback: '#ffffff' })),
+            field('Caption size (px)', bind(e, 'fontSize', changed, 'number', { min: 8, placeholder: '32' })),
+            field('Caption colour', bind(e, 'captionColor', changed, 'color')),
+            field('Padding', bind(e, 'padding', changed, 'number', { min: 0, placeholder: '16' })),
+            field('Quiet zone', bind(e, 'margin', changed, 'number', { min: 0, max: 8, placeholder: '1' }))),
+          h('p', { class: 'hint' }, 'Keep a light background behind a dark code: phones read that best.'));
+          break;
+        case 'countdown':
+          out.push(h('div', { class: 'fields' },
+            field('Count down to', bind(e, 'mode', rerender, 'select', { options: [['date', 'A date and time'], ['daily', 'A time every day']] }), { wide: true }),
+            e.mode === 'daily'
+              ? field('Time', bind(e, 'time', changed, 'time'), { wide: true, hint: 'Starts over every day, e.g. "Doors open in".' })
+              : field('Date and time', bind(e, 'target', changed, 'datetime-local'), { wide: true, hint: 'In the time zone under Settings → Application.' }),
+            field('Text above', bind(e, 'label', changed, 'text', { placeholder: 'e.g. Starts in' }), { wide: true }),
+            e.mode === 'daily' ? null : field('Text when done', bind(e, 'doneText', changed, 'text', { placeholder: 'e.g. We are live!' }), { wide: true }),
+            field('Style', bind(e, 'style', changed, 'select', { options: [['blocks', 'Blocks with units'], ['text', 'One line (3 days 04:12:09)']] }), { wide: true }),
+            ...[['days', 'Days'], ['hours', 'Hours'], ['minutes', 'Minutes'], ['seconds', 'Seconds']].map(([u, l]) => h('label', { class: 'check' },
+              h('input', { type: 'checkbox', checked: e[`show_${u}`] !== false, onchange: (ev) => { e[`show_${u}`] = ev.target.checked; changed(); } }), l)),
+            ...fontFields(96),
+            field('Block colour', bind(e, 'accent', changed, 'color'), { wide: true }),
+            field('Background', bind(e, 'background', changed, 'color'), { wide: true })));
+          break;
+        case 'agenda': {
+          const feed = feeds.find((f) => f.id === e.feedId);
+          out.push(h('div', { class: 'fields' },
+            field('Calendar', bind(e, 'feedId', () => { rerender(); renderSide(); }, 'select', { options: calendarOptions }), { wide: true, hint: feed ? `Shows the next ${feed.daysAhead || 14} days (set on the calendar under Media management → Feeds).` : 'Add an iCal or Outlook calendar under Media management → Feeds.' }),
+            field('Layout', bind(e, 'layout', rerender, 'select', { options: [['list', 'List by day'], ['now-next', 'Now and next (room sign)']] }), { wide: true }),
+            field('Title', bind(e, 'title', changed, 'text', { placeholder: e.layout === 'now-next' ? 'e.g. Meeting room 1' : 'e.g. This week' }), { wide: true }),
+            field(e.layout === 'now-next' ? 'Next appointments' : 'Appointments', bind(e, 'maxItems', changed, 'number', { min: 1, max: 30, placeholder: e.layout === 'now-next' ? '3' : '8' })),
+            field('Font size (px)', bind(e, 'fontSize', changed, 'number', { min: 8, placeholder: '36' })),
+            h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: e.showLocation !== false, onchange: (ev) => { e.showLocation = ev.target.checked; changed(); } }), 'Location'),
+            h('label', { class: 'check' }, bind(e, 'showDescription', changed, 'checkbox'), 'Description'),
+            e.layout === 'now-next' ? null : h('label', { class: 'check wide' }, h('input', { type: 'checkbox', checked: e.groupByDay !== false, onchange: (ev) => { e.groupByDay = ev.target.checked; changed(); } }), 'Headings per day (Today, Tomorrow, …)'),
+            field('Text colour', bind(e, 'color', changed, 'color', { fallback: '#ffffff' }), { wide: true }),
+            field('Accent colour', bind(e, 'accent', changed, 'color', { fallback: '#4f8cff' })),
+            field('Card background', bind(e, 'cardBackground', changed, 'color')),
+            field('Background', bind(e, 'background', changed, 'color'), { wide: true }),
+            field('Font family', bind(e, 'fontFamily', changed, 'text', { placeholder: 'DejaVu Sans' }), { wide: true })),
+          h('p', { class: 'hint' }, 'Refreshes every minute. Private Outlook appointments show as "Private appointment".'));
+          break;
+        }
+        case 'departures':
+          out.push(stopPicker(e, rerender), h('div', { class: 'fields' },
+            h('div', { class: 'field wide' }, h('span', { class: 'field-title' }, 'Transport'), h('div', { class: 'days' }, TRANSIT_MODES.map(([m, l]) => h('label', null,
+              h('input', { type: 'checkbox', checked: !(e.modes || []).length || e.modes.includes(m), onchange: (ev) => {
+                const all = (e.modes || []).length ? e.modes : TRANSIT_MODES.map(([x]) => x);
+                const next = all.filter((x) => x !== m).concat(ev.target.checked ? [m] : []);
+                e.modes = next.length === TRANSIT_MODES.length ? [] : next;
+                changed();
+              } }), l))), h('div', { class: 'hint' }, 'All ticked shows every departure.')),
+            field('Rows', bind(e, 'maxRows', changed, 'number', { min: 1, max: 30, placeholder: '8' })),
+            field('Times', bind(e, 'timeFormat', changed, 'select', { options: [['relative', 'Minutes to go (3 min)'], ['clock', 'Clock time with delay (14:05 +3)']] })),
+            field('Title', bind(e, 'title', changed, 'text', { placeholder: e.stopName || 'Name of the stop' }), { wide: true }),
+            h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: e.showTitle !== false, onchange: (ev) => { e.showTitle = ev.target.checked; changed(); } }), 'Title bar with clock'),
+            h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: e.showHeader !== false, onchange: (ev) => { e.showHeader = ev.target.checked; changed(); } }), 'Column headings'),
+            h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: e.showPlatform !== false, onchange: (ev) => { e.showPlatform = ev.target.checked; rerender(); } }), 'Platform'),
+            field('Font size (px)', bind(e, 'fontSize', changed, 'number', { min: 8, placeholder: '40' })),
+            field('Text colour', bind(e, 'color', changed, 'color', { fallback: '#ffffff' })),
+            field('Title bar', bind(e, 'headBackground', changed, 'color', { fallback: '#1f3c88' })),
+            field('Delay colour', bind(e, 'lateColor', changed, 'color', { fallback: '#ff6b6b' })),
+            field('Background', bind(e, 'background', changed, 'color'), { wide: true }),
+            field('Font family', bind(e, 'fontFamily', changed, 'text', { placeholder: 'DejaVu Sans' }), { wide: true })),
+          h('p', { class: 'hint' }, 'Live times from Transitous (or the server set under Settings → Application), refreshed every 30 seconds. Includes the other platforms of the same station.'));
+          break;
+        case 'livestream': {
+          const src = window.Beeldkrant.streamSource(e.url);
+          out.push(h('div', { class: 'fields' },
+            field('Stream address', bind(e, 'url', () => { changed(); }, 'url', { placeholder: 'https://www.youtube.com/watch?v=… or https://…/live.m3u8' }), { wide: true,
+              hint: src ? `Recognised as ${{ youtube: 'YouTube', twitch: 'Twitch', hls: 'an HLS stream', video: 'a video address' }[src.kind]}.` : 'YouTube (video or channel), Twitch, HLS (.m3u8) or a direct video address.' }),
+            field('Fit', bind(e, 'fit', changed, 'select', { options: [['contain', 'Fit (letterbox)'], ['cover', 'Fill (crop)'], ['fill', 'Stretch']] })),
+            h('label', { class: 'check' }, bind(e, 'audio', changed, 'checkbox'), 'Play audio')),
+          h('p', { class: 'hint' }, 'Plays live on air and reconnects by itself; the editor shows a still. For RTSP or RTMP cameras use the IP camera element. An HLS stream from another site must allow playback elsewhere (CORS).'));
+          break;
+        }
+        case 'social': {
+          const feed = feeds.find((f) => f.id === e.feedId);
+          out.push(h('div', { class: 'fields' },
+            field('Feed', bind(e, 'feedId', () => { feedPreview = {}; rerender(); renderSide(); }, 'select', { options: socialOptions }), { wide: true, hint: feed ? `Shows the ${feed.maxItems || 10} newest posts (set on the feed).` : 'Add an Instagram or Facebook feed under Media management → Feeds.' }),
+            field('Layout', bind(e, 'layout', rerender, 'select', { options: [['single', 'One post at a time, photo full size'], ['grid', 'Grid of cards'], ['list', 'List: photo left, text right']] }), { wide: true }),
+            e.layout === 'single' || !e.layout ? null : field('Posts per page', bind(e, 'perPage', changed, 'number', { min: 1, max: 24, placeholder: '4' })),
+            e.layout === 'grid' ? field('Columns', bind(e, 'columns', changed, 'number', { min: 1, max: 8, placeholder: '3' })) : null,
+            field(e.layout === 'single' || !e.layout ? 'Each post (s)' : 'Each page (s)', bind(e, 'interval', changed, 'number', { min: 2, placeholder: '10' })),
+            field('Show at most', bind(e, 'maxItems', changed, 'number', { min: 1, placeholder: 'all' })),
+            h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: e.showImage !== false, onchange: (ev) => { e.showImage = ev.target.checked; changed(); } }), 'Photos'),
+            h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: e.showSource !== false, onchange: (ev) => { e.showSource = ev.target.checked; changed(); } }), 'Account name'),
+            h('label', { class: 'check' }, bind(e, 'showDate', changed, 'checkbox'), 'Date'),
+            field('Caption lines', bind(e, 'descLines', changed, 'number', { min: 1, max: 20, placeholder: '5' })),
+            field('Text size (px)', bind(e, 'fontSize', changed, 'number', { min: 8, placeholder: '40' })),
+            field('Spacing (px)', bind(e, 'gap', changed, 'number', { min: 0, placeholder: '20' })),
+            field('Text colour', bind(e, 'color', changed, 'color', { fallback: '#ffffff' }), { wide: true }),
+            field('Card background', bind(e, 'cardBackground', changed, 'color'), { wide: true }),
+            field('Font family', bind(e, 'fontFamily', changed, 'text', { placeholder: 'DejaVu Sans' }), { wide: true })),
+          h('p', { class: 'hint' }, 'Videos show their cover picture. New posts show up every round.'));
+          break;
+        }
         case 'webpage':
           out.push(h('div', { class: 'fields' },
             field('URL', bind(e, 'url', changed, 'url'), { wide: true }),
@@ -1618,46 +1769,86 @@
   }
 
   // ---------- feeds ----------
+  // RSS feeds, calendars (iCal or Outlook) and social media accounts. They all give items for scenes,
+  // tickers and RSS elements; calendars also feed agenda elements and social feeds the social element.
   async function pageFeeds(main) {
-    const feeds = await GET('/api/feeds');
+    const [feeds, accounts] = await Promise.all([GET('/api/feeds'), GET('/api/accounts').catch(() => [])]);
+    const fbAccounts = accounts.filter((a) => a.provider === 'facebook');
+    const source = (f) => ({ rss: f.url, ical: f.url, outlook: f.mailbox, instagram: 'Instagram account', facebook: `Facebook page${f.pageName ? `: ${f.pageName}` : ''}` }[f.kind || 'rss'] || '');
+    const when = (i) => (i.allDay ? i.date : new Date(i.date).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }));
     const edit = (feed) => {
-      const data = feed ? clone(feed) : { name: '', url: '', refreshMinutes: 10, maxItems: 10 };
+      const data = feed ? clone(feed) : { kind: 'rss', name: '', url: '', refreshMinutes: 10, maxItems: 10 };
       const previewBox = h('div', { class: 'stack' });
-      modal(feed ? 'Edit feed' : 'Add RSS feed', h('div', { class: 'stack' },
-        h('div', { class: 'fields' },
-          field('Name', bind(data, 'name', () => {}), { wide: true }),
-          field('Feed URL (RSS or Atom)', bind(data, 'url', () => {}, 'url', { placeholder: 'https://example.com/rss.xml' }), { wide: true }),
-          field('Refresh every (minutes)', bind(data, 'refreshMinutes', () => {}, 'number', { min: 1 })),
-          field('Number of items', bind(data, 'maxItems', () => {}, 'number', { min: 1, max: 100, placeholder: '10' }), { hint: 'How many of the newest items scenes, tickers and RSS elements show.' })),
-        previewBox),
-      (close) => [
-        feed ? h('button', { onclick: async () => {
+      const body = h('div', { class: 'stack' });
+      let pages = null;
+      const loadPages = async () => {
+        pages = null;
+        if (!data.accountId) return;
+        try { pages = await GET(`/api/accounts/${data.accountId}/pages`); } catch (err) { pages = []; toast(err.message, 'err'); }
+        draw();
+      };
+      const draw = () => {
+        const kind = data.kind || 'rss';
+        const calendar = CALENDAR_KINDS.includes(kind);
+        const fields = {
+          rss: [field('Feed URL (RSS or Atom)', bind(data, 'url', () => {}, 'url', { placeholder: 'https://example.com/rss.xml' }), { wide: true })],
+          ical: [field('Calendar link (iCal / .ics)', bind(data, 'url', () => {}, 'url', { placeholder: 'https://calendar.google.com/calendar/ical/…/basic.ics' }), { wide: true,
+            hint: 'Google Calendar: Settings → the calendar → "Secret address in iCal format". Outlook: Settings → Calendar → Shared calendars → Publish a calendar → ICS link.' })],
+          outlook: [field('Mailbox or room (e-mail address)', bind(data, 'mailbox', () => {}, 'email', { placeholder: 'meetingroom1@company.com' }), { wide: true,
+            hint: 'Uses the Entra app under Users and roles → Configure SSO. Give it the Microsoft Graph application permission Calendars.Read with admin consent.' })],
+          instagram: [field('Access token', h('input', { type: 'password', placeholder: data.hasAccessToken ? '•••••••• (saved; paste a new one to replace it)' : 'IGAA…', oninput: (ev) => { data.accessToken = ev.target.value; } }), { wide: true,
+            hint: 'For an Instagram professional (business or creator) account: in your Meta app, add "Instagram API with Instagram login", add the account and click Generate token. Beeldkrant renews the token by itself while it is in use.' })],
+          facebook: [
+            fbAccounts.length
+              ? field('Facebook account', bind(data, 'accountId', () => { data.pageId = null; loadPages(); }, 'select', { options: [['', '— choose an account —'], ...fbAccounts.map((a) => [a.id, a.name])] }), { wide: true })
+              : h('p', { class: 'hint wide' }, 'Link a Facebook account first under Outputs → Linked accounts.'),
+            data.accountId ? field('Page', pages ? bind(data, 'pageId', () => { data.pageName = (pages.find((p) => p.id === data.pageId) || {}).name || ''; }, 'select', { options: [['', '— choose a page —'], ...pages.map((p) => [p.id, p.name])] }) : h('p', { class: 'muted' }, 'Loading pages…'), { wide: true }) : null],
+        }[kind];
+        put(body,
+          h('div', { class: 'fields' },
+            field('Type', bind(data, 'kind', draw, 'select', { options: Object.entries({ rss: 'RSS or Atom feed', ical: 'Calendar: iCal link (Google, Outlook, …)', outlook: 'Calendar: Outlook / Exchange mailbox or room', instagram: 'Instagram account', facebook: 'Facebook page' }) }), { wide: true }),
+            field('Name', bind(data, 'name', () => {}), { wide: true }),
+            ...fields,
+            field('Refresh every (minutes)', bind(data, 'refreshMinutes', () => {}, 'number', { min: 1, placeholder: '10' })),
+            field(calendar ? 'Appointments' : SOCIAL_KINDS.includes(kind) ? 'Number of posts' : 'Number of items', bind(data, 'maxItems', () => {}, 'number', { min: 1, max: 100, placeholder: '10' }),
+              { hint: calendar ? 'The most appointments any element shows.' : 'How many of the newest items scenes, tickers and elements show.' }),
+            calendar ? field('Days ahead', bind(data, 'daysAhead', () => {}, 'number', { min: 1, max: 366, placeholder: '14' })) : null),
+          previewBox);
+      };
+      if (data.kind === 'facebook' && data.accountId) loadPages();
+      draw();
+      const save = async () => {
+        if (!String(data.name || '').trim()) throw new Error('Enter a name');
+        return feed ? PUT(`/api/feeds/${feed.id}`, data) : POST('/api/feeds', data);
+      };
+      modal(feed ? 'Edit feed' : 'Add feed', body, (close) => [
+        h('button', { onclick: async () => {
           put(previewBox, h('p', { class: 'muted' }, 'Loading…'));
           try {
-            await PUT(`/api/feeds/${feed.id}`, data);
-            const res = await GET(`/api/feeds/${feed.id}/items?force=1`);
-            put(previewBox, 
+            const saved = await save();
+            if (!feed) { feed = saved; data.id = saved.id; }
+            data.accessToken = '';
+            data.hasAccessToken = saved.hasAccessToken;
+            const res = await GET(`/api/feeds/${saved.id}/items?force=1`);
+            put(previewBox,
               res.error ? h('div', { class: 'badge err' }, res.error) : h('div', { class: 'badge ok' }, `Showing ${res.items.length} of ${res.total ?? res.items.length} items`),
               ...res.items.slice(0, 6).map((i) => h('div', { class: 'feed-preview-item' },
-                i.image ? h('img', { src: i.image, alt: '', loading: 'lazy' }) : h('div', { class: 'feed-noimg' }, 'No photo'),
-                h('div', null, h('b', null, i.title), h('div', { class: 'muted' }, (i.description || '').slice(0, 160))))));
+                CALENDAR_KINDS.includes(saved.kind) ? h('div', { class: 'feed-noimg' }, when(i)) : i.image ? h('img', { src: i.image, alt: '', loading: 'lazy' }) : h('div', { class: 'feed-noimg' }, 'No photo'),
+                h('div', null, h('b', null, i.title || ''), h('div', { class: 'muted' }, (i.location || i.description || '').slice(0, 160))))));
           } catch (err) { put(previewBox, h('div', { class: 'badge err' }, err.message)); }
-        } }, 'Test feed') : null,
-        h('button', { onclick: close }, 'Cancel'),
+        } }, 'Save and test'),
+        h('button', { onclick: () => { close(); if (feed) route(); } }, 'Cancel'),
         h('button', { class: 'primary', onclick: async () => {
-          try {
-            if (!/^https?:\/\//.test(data.url || '')) throw new Error('Enter a valid http(s) URL');
-            if (feed) await PUT(`/api/feeds/${feed.id}`, data); else await POST('/api/feeds', data);
-            close(); route();
-          } catch (err) { fail(err); }
+          try { await save(); close(); route(); } catch (err) { fail(err); }
         } }, 'Save'),
       ]);
     };
-    main.append(h('div', { class: 'row between' }, h('h1', null, 'RSS feeds'), h('button', { class: 'primary', onclick: () => edit(null) }, '+ Add feed')),
-      h('p', { class: 'muted' }, 'Show a feed with photos and text with the RSS feed element, repeat a scene once per item (scene template), or use it as ticker headlines.'),
+    main.append(h('div', { class: 'row between' }, h('h1', null, 'Feeds'), h('button', { class: 'primary', onclick: () => edit(null) }, '+ Add feed')),
+      h('p', { class: 'muted' }, 'RSS feeds, calendars and social media accounts. Show them with the RSS feed, Agenda and Social feed elements, repeat a scene once per item (scene template), or use them as ticker headlines.'),
       feeds.length ? h('div', { class: 'card' }, h('table', null,
-        h('tr', null, h('th', null, 'Name'), h('th', null, 'URL'), h('th', null, 'Items'), h('th', null, 'Refresh'), h('th', null, '')),
-        feeds.map((f) => h('tr', null, h('td', null, f.name), h('td', { class: 'muted' }, f.url), h('td', null, String(f.maxItems || 10)), h('td', null, `${f.refreshMinutes || 10} min`),
+        h('tr', null, h('th', null, 'Name'), h('th', null, 'Type'), h('th', null, 'Source'), h('th', null, 'Items'), h('th', null, 'Refresh'), h('th', null, '')),
+        feeds.map((f) => h('tr', null, h('td', null, f.name), h('td', null, h('span', { class: 'badge' }, FEED_KINDS[f.kind || 'rss'])), h('td', { class: 'muted' }, source(f)),
+          h('td', null, String(f.maxItems || 10)), h('td', null, `${f.refreshMinutes || 10} min`),
           h('td', { style: { textAlign: 'right' } },
             h('button', { onclick: () => edit(f) }, 'Edit'), ' ',
             h('button', { class: 'ghost', onclick: async () => { if (await confirmBox(`Delete feed "${f.name}"?`)) { await DEL(`/api/feeds/${f.id}`); route(); } } }, 'Delete')))))) : h('div', { class: 'card' }, 'No feeds yet.'));
@@ -2080,6 +2271,7 @@
     const general = { panelName: settings.panelName || 'Beeldkrant' };
     const server = { serverAddress: settings.serverAddress || '', port: settings.port };
     const region = { timezone: settings.timezone, locale: settings.locale };
+    const sources = { transitServer: settings.transitServer || '' };
     const panelUrl = () => `http://${server.serverAddress || location.hostname}:${server.port}${BASE}/admin/`;
     const urlHint = h('div', { class: 'hint' });
     const showUrl = () => { urlHint.textContent = `The panel is reached at ${panelUrl()}`; };
@@ -2112,7 +2304,11 @@
         h('div', { class: 'card stack' }, h('h2', null, 'Region'),
           field('Time zone', bind(region, 'timezone', () => {}, 'text', { placeholder: 'Europe/Amsterdam' }), { hint: 'Used by the schedule, backups, clocks and dates.' }),
           field('Language for dates', bind(region, 'locale', () => {}, 'select', { options: [['en-GB', 'English (UK)'], ['en-US', 'English (US)'], ['nl-NL', 'Dutch'], ['de-DE', 'German'], ['fr-FR', 'French']] })),
-          h('button', { class: 'primary', onclick: async () => { try { await PUT('/api/settings', region); toast('Saved', 'ok'); } catch (err) { fail(err); } } }, 'Save'))));
+          h('button', { class: 'primary', onclick: async () => { try { await PUT('/api/settings', region); toast('Saved', 'ok'); } catch (err) { fail(err); } } }, 'Save')),
+        h('div', { class: 'card stack' }, h('h2', null, 'Data sources'),
+          field('Public transport server', bind(sources, 'transitServer', () => {}, 'url', { placeholder: 'https://api.transitous.org' }),
+            { hint: 'The MOTIS server that departure boards get their times from. Leave empty for Transitous: free, with live times for the Netherlands and much of Europe.' }),
+          h('button', { class: 'primary', onclick: async () => { try { await PUT('/api/settings', sources); toast('Saved', 'ok'); } catch (err) { fail(err); } } }, 'Save'))));
   }
 
 
@@ -2218,7 +2414,7 @@
         card('#media/video', 'Video', String(videos.length), `${length} of video · ${size(videos)}`),
         card('#media/audio', 'Audio', String(files.filter((m) => m.type === 'audio').length), size(files.filter((m) => m.type === 'audio'))),
         card('#media/ads', 'Ads', String(files.filter((m) => m.isAd).length), 'Files marked as ads (commercials)'),
-        card('#feeds', 'RSS feeds', String(feeds.length), null, feeds.map((f) => f.name)),
+        card('#feeds', 'Feeds', String(feeds.length), null, feeds.map((f) => f.name)),
         card('#streams', 'Input streams', String(streams.length), 'Icecast / Shoutcast audio', streams.map((m) => (musicUse(m.id).length ? `${m.name} (music in ${musicUse(m.id).join(', ')})` : m.name))),
         card('#cameras', 'IP cameras', String(cams.length), 'RTSP, RTMP(S) and RTP', cams.map((c) => `${c.name} (${c.protocol.toUpperCase()})`))));
   }

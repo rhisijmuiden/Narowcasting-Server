@@ -9,6 +9,7 @@ const store = require('./store');
 const auth = require('./auth');
 const feeds = require('./feeds');
 const weather = require('./weather');
+const departures = require('./departures');
 const schedule = require('./schedule');
 const stream = require('./stream');
 const updater = require('./updater');
@@ -262,6 +263,22 @@ app.get('/api/player/weather', playerAccess, wrap(async (req, res) => {
   res.json(await weather.getWeather(req.query.lat || 52.37, req.query.lon || 4.9));
 }));
 
+app.get('/api/player/departures', playerAccess, wrap(async (req, res) => {
+  if (!req.query.stop) return res.status(400).json({ error: 'No stop chosen' });
+  try { res.json(await departures.departures(String(req.query.stop), { n: req.query.n, modes: req.query.modes })); } catch (err) { res.status(502).json({ error: err.message }); }
+}));
+
+// QR codes for QR code elements, as SVG in the chosen colours.
+const QR_COLOUR = /^#[0-9a-f]{6}$/i;
+app.get('/api/player/qr', playerAccess, wrap(async (req, res) => {
+  const text = String(req.query.text || '');
+  if (!text || text.length > 1500) return res.status(400).json({ error: 'Enter the text or link for the QR code (at most 1500 characters)' });
+  const dark = QR_COLOUR.test(req.query.fg || '') ? req.query.fg : '#000000';
+  const light = QR_COLOUR.test(req.query.bg || '') ? req.query.bg : '#ffffff';
+  const svg = await QRCode.toString(text, { type: 'svg', margin: Math.min(8, Math.max(0, Number(req.query.margin ?? 2) || 0)), errorCorrectionLevel: 'M', color: { dark, light } });
+  res.type('image/svg+xml').set('Cache-Control', 'public, max-age=3600').send(svg);
+}));
+
 // Live reload: the player reconnects and refreshes when anything is saved.
 let revision = Date.now();
 const listeners = new Set();
@@ -291,6 +308,8 @@ app.get('/api/player/camera/:id/snapshot', playerAccess, wrap(async (req, res) =
 }));
 
 app.use('/media', playerAccess, express.static(store.MEDIA_DIR, { maxAge: '1h', fallthrough: false }));
+// hls.js plays HLS live streams (.m3u8) in live stream elements.
+app.get('/player/vendor/hls.min.js', (req, res) => res.sendFile(require.resolve('hls.js/dist/hls.min.js'), { maxAge: '1d' }));
 app.use('/player', express.static(path.join(PUBLIC, 'player')));
 
 // ---------- everything below needs a login ----------
@@ -443,8 +462,36 @@ app.post('/api/playouts/:id/clone', (req, res) => {
   res.json(store.create('playouts', copy));
 });
 
-// Generic CRUD for feeds, playouts and schedule rules
-for (const col of ['feeds', 'playouts', 'schedule']) {
+// Feeds. Access tokens never go back to the browser; an empty one keeps the saved one.
+app.get('/api/feeds', (req, res) => res.json(store.list('feeds').map(feeds.publicFeed)));
+app.get('/api/feeds/:id', (req, res) => {
+  const feed = store.get('feeds', req.params.id);
+  feed ? res.json(feeds.publicFeed(feed)) : res.status(404).json({ error: 'Not found' });
+});
+app.post('/api/feeds', (req, res) => {
+  try { res.json(feeds.publicFeed(store.create('feeds', feeds.cleanFeed(clean(req.body))))); } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.put('/api/feeds/:id', (req, res) => {
+  const existing = store.get('feeds', req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+  try {
+    const item = store.update('feeds', existing.id, feeds.cleanFeed(clean(req.body), existing));
+    feeds.forget(existing.id);
+    res.json(feeds.publicFeed(item));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.delete('/api/feeds/:id', (req, res) => {
+  feeds.forget(req.params.id);
+  store.remove('feeds', req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' });
+});
+
+// Stops for departure board elements.
+app.get('/api/transit/stops', wrap(async (req, res) => {
+  try { res.json(await departures.searchStops(req.query.q)); } catch (err) { res.status(502).json({ error: err.message }); }
+}));
+
+// Generic CRUD for playouts and schedule rules
+for (const col of ['playouts', 'schedule']) {
   app.get(`/api/${col}`, (req, res) => res.json(store.list(col)));
   app.get(`/api/${col}/:id`, (req, res) => {
     const item = store.get(col, req.params.id);
@@ -453,7 +500,6 @@ for (const col of ['feeds', 'playouts', 'schedule']) {
   app.post(`/api/${col}`, (req, res) => res.json(store.create(col, clean(req.body))));
   app.put(`/api/${col}/:id`, (req, res) => {
     const item = store.update(col, req.params.id, clean(req.body));
-    if (col === 'feeds') feeds.forget(req.params.id);
     item ? res.json(item) : res.status(404).json({ error: 'Not found' });
   });
   app.delete(`/api/${col}/:id`, (req, res) => {
@@ -508,6 +554,11 @@ app.put('/api/settings', (req, res) => {
   }
   if (timezone) {
     try { new Intl.DateTimeFormat('en', { timeZone: timezone }); patch.timezone = timezone; } catch { return res.status(400).json({ error: 'Unknown timezone' }); }
+  }
+  if ('transitServer' in (req.body || {})) {
+    const url = String(req.body.transitServer || '').trim().replace(/\/+$/, '');
+    if (url && !/^https?:\/\/[^\s]+$/.test(url)) return res.status(400).json({ error: 'Enter the public transport server as an http(s) address' });
+    patch.transitServer = url;
   }
   store.setSection('settings', patch);
   res.json({ ok: true });
