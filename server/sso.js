@@ -213,4 +213,23 @@ async function searchDirectory(q) {
   });
 }
 
-module.exports = { config, publicConfig, ready, startUrl, callback, test, searchDirectory, redirectUri, AUTHORITY };
+// Events of an Outlook / Exchange Online calendar (a user or a room mailbox) between two dates, for
+// calendar feeds. Needs the Microsoft Graph application permission Calendars.Read with admin consent.
+async function calendarView(mailbox, from, to) {
+  const c = config();
+  if (!c.tenantId || !c.clientId || !c.clientSecret) throw new Error('Configure Microsoft Entra under Users and roles → Configure SSO first');
+  const access = await appToken(c);
+  const params = new URLSearchParams({
+    startDateTime: from.toISOString(), endDateTime: to.toISOString(), $orderby: 'start/dateTime', $top: '100',
+    $select: 'subject,bodyPreview,start,end,isAllDay,location,sensitivity,showAs,isCancelled,webLink',
+  });
+  const data = await getJson(`${GRAPH}/v1.0/users/${encodeURIComponent(mailbox)}/calendarView?${params}`, { headers: { Authorization: `Bearer ${access}`, Prefer: 'outlook.timezone="UTC"' } })
+    .catch((err) => {
+      if (err.status === 403) throw new Error('Not allowed to read calendars: add the Microsoft Graph application permission Calendars.Read with admin consent');
+      if (err.status === 404) throw new Error(`Mailbox ${mailbox} not found`);
+      throw err;
+    });
+  return data.value || [];
+}
+
+module.exports = { config, publicConfig, ready, startUrl, callback, test, searchDirectory, calendarView, redirectUri, AUTHORITY };

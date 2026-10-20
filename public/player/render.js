@@ -75,6 +75,69 @@
     zoom: [{ opacity: 0, transform: 'scale(1.08)' }, { opacity: 1, transform: 'scale(1)' }],
   };
 
+  // Element types whose box takes the background colour set on the element.
+  const BACKGROUND_TYPES = ['text', 'box', 'clock', 'weather', 'countdown', 'agenda', 'departures'];
+
+  // A few words in the language set for dates (Settings → Region); English otherwise.
+  const WORDS = {
+    en: { days: ['day', 'days'], hours: ['hour', 'hours'], minutes: ['min', 'min'], seconds: ['sec', 'sec'], allDay: 'All day', now: 'Now', next: 'Next', free: 'Available', until: 'until', noEvents: 'No appointments', cancelled: 'Cancelled', platform: 'Platform', departure: 'Departure', destination: 'Destination', line: 'Line', min: 'min', due: 'now', noDepartures: 'No departures' },
+    nl: { days: ['dag', 'dagen'], hours: ['uur', 'uur'], minutes: ['min', 'min'], seconds: ['sec', 'sec'], allDay: 'Hele dag', now: 'Nu', next: 'Hierna', free: 'Beschikbaar', until: 'tot', noEvents: 'Geen afspraken', cancelled: 'Rijdt niet', platform: 'Spoor', departure: 'Vertrek', destination: 'Richting', line: 'Lijn', min: 'min', due: 'nu', noDepartures: 'Geen vertrekken' },
+    de: { days: ['Tag', 'Tage'], hours: ['Stunde', 'Stunden'], minutes: ['Min', 'Min'], seconds: ['Sek', 'Sek'], allDay: 'Ganztägig', now: 'Jetzt', next: 'Danach', free: 'Frei', until: 'bis', noEvents: 'Keine Termine', cancelled: 'Fällt aus', platform: 'Gleis', departure: 'Abfahrt', destination: 'Ziel', line: 'Linie', min: 'Min', due: 'jetzt', noDepartures: 'Keine Abfahrten' },
+    fr: { days: ['jour', 'jours'], hours: ['heure', 'heures'], minutes: ['min', 'min'], seconds: ['s', 's'], allDay: 'Toute la journée', now: 'Maintenant', next: 'Ensuite', free: 'Disponible', until: "jusqu'à", noEvents: 'Aucun rendez-vous', cancelled: 'Supprimé', platform: 'Voie', departure: 'Départ', destination: 'Destination', line: 'Ligne', min: 'min', due: 'imminent', noDepartures: 'Aucun départ' },
+  };
+  const words = (ctx) => WORDS[String(ctx.locale || 'en').slice(0, 2)] || WORDS.en;
+
+  // 'YYYY-MM-DDTHH:MM' as a wall-clock time in the given time zone (the one under Settings → Region).
+  function zonedDate(str, tz) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(str || ''));
+    if (!m) return null;
+    const guess = Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5]);
+    if (!tz) return new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5]);
+    const offset = (t) => {
+      try {
+        const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          .formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+        return Date.UTC(+p.year, p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - t;
+      } catch { return -new Date(t).getTimezoneOffset() * 60000; }
+    };
+    const first = guess - offset(guess);
+    return new Date(guess - offset(first));
+  }
+
+  // The calendar day ('YYYY-MM-DD') of a moment in the given time zone.
+  function dayKey(ctx, date) {
+    try { return new Intl.DateTimeFormat('en-CA', { timeZone: ctx.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date); } catch { return date.toISOString().slice(0, 10); }
+  }
+
+  // Loads a script once (hls.js for live streams).
+  const scripts = new Map();
+  function loadScript(src) {
+    if (!scripts.has(src)) {
+      scripts.set(src, new Promise((resolve, reject) => {
+        const tag = document.createElement('script');
+        tag.src = src;
+        tag.onload = resolve;
+        tag.onerror = () => { scripts.delete(src); reject(new Error(`Could not load ${src}`)); };
+        document.head.appendChild(tag);
+      }));
+    }
+    return scripts.get(src);
+  }
+
+  // Which service a live stream address points at.
+  function streamSource(url) {
+    const u = String(url || '').trim();
+    let m = /(?:youtube(?:-nocookie)?\.com\/(?:watch\?(?:.*&)?v=|live\/|embed\/|shorts\/)|youtu\.be\/)([\w-]{11})/.exec(u);
+    if (m) return { kind: 'youtube', id: m[1] };
+    m = /youtube\.com\/channel\/(UC[\w-]{22})/.exec(u);
+    if (m) return { kind: 'youtube', channel: m[1] };
+    m = /twitch\.tv\/([\w]{3,25})\/?(?:$|\?)/.exec(u);
+    if (m) return { kind: 'twitch', channel: m[1] };
+    if (/\.m3u8(\?|$)/i.test(u)) return { kind: 'hls', url: u };
+    if (/^https?:\/\//i.test(u)) return { kind: 'video', url: u };
+    return null;
+  }
+
   function box(e) {
     const b = el('div', `el el-${e.type}`);
     Object.assign(b.style, {
@@ -83,7 +146,7 @@
       zIndex: String(Number(e.z) || 0),
       opacity: e.opacity != null && e.opacity !== '' ? String(Number(e.opacity) / 100) : '',
       borderRadius: e.radius ? `${Number(e.radius)}px` : '',
-      background: e.type === 'text' || e.type === 'box' || e.type === 'clock' || e.type === 'weather' ? (e.background || 'transparent') : '',
+      background: BACKGROUND_TYPES.includes(e.type) ? (e.background || 'transparent') : '',
     });
     if (e.rotate) b.style.transform = `rotate(${Number(e.rotate)}deg)`;
     return b;
@@ -248,8 +311,9 @@
       wrap.style.setProperty('--rss-card', e.cardBackground || 'rgba(0,0,0,0.45)');
       wrap.style.setProperty('--rss-gap', `${Number(e.gap ?? 20)}px`);
       b.appendChild(wrap);
-      if (!e.feedId) { if (ctx.editor) wrap.appendChild(el('div', 'placeholder', 'Choose a feed')); return { node: b, done: null }; }
-      const layout = e.layout || 'list';
+      if (!e.feedId) { if (ctx.editor) wrap.appendChild(el('div', 'placeholder', e.type === 'social' ? 'Choose an Instagram or Facebook feed' : 'Choose a feed')); return { node: b, done: null }; }
+      const social = e.type === 'social';
+      const layout = e.layout || (social ? 'single' : 'list');
       const perPage = layout === 'single' ? 1 : Math.max(1, Number(e.perPage) || (layout === 'grid' ? 6 : 4));
       if (layout === 'grid') wrap.style.gridTemplateColumns = `repeat(${Math.max(1, Number(e.columns) || 3)}, 1fr)`;
       const card = (item) => {
@@ -261,9 +325,10 @@
           c.appendChild(im);
         }
         const t = el('div', 'rss-text');
-        t.appendChild(el('div', 'rss-title', item.title || ''));
-        if (e.showDescription !== false && item.description) {
-          const d = el('div', 'rss-desc', item.description);
+        if (social && e.showSource !== false && item.feedTitle) t.appendChild(el('div', 'rss-source', item.feedTitle));
+        if (!social) t.appendChild(el('div', 'rss-title', item.title || ''));
+        if ((social || e.showDescription !== false) && item.description) {
+          const d = el('div', social ? 'rss-desc rss-caption' : 'rss-desc', item.description);
           d.style.webkitLineClamp = String(Number(e.descLines) || (layout === 'single' ? 4 : 2));
           t.appendChild(d);
         }
@@ -278,7 +343,7 @@
         try {
           const data = await feedItems(e.feedId);
           const max = Number(e.maxItems);
-          return (data.items || []).slice(0, max > 0 ? max : undefined);
+          return (data.items || []).slice(0, max > 0 ? max : undefined).map((i) => ({ ...i, feedTitle: data.title }));
         } catch { return []; }
       };
       const showPage = (items, page) => {
@@ -290,7 +355,7 @@
           if (!items.length) { wrap.replaceChildren(el('div', 'placeholder', 'No items in this feed yet')); return; }
           showPage(items, 0);
           const pages = Math.ceil(items.length / perPage);
-          if (pages > 1) b.appendChild(badge(`RSS · ${items.length} items · ${pages} pages`));
+          if (pages > 1) b.appendChild(badge(`${e.type === 'social' ? 'Social' : 'RSS'} · ${items.length} ${e.type === 'social' ? 'posts' : 'items'} · ${pages} pages`));
         });
         return { node: b, done: null };
       }
@@ -312,6 +377,9 @@
       load().then((items) => { if (!wrap.children.length && items.length) showPage(items, 0); });
       return { node: b, done };
     },
+
+    // Instagram or Facebook posts: the RSS element with the caption instead of a title.
+    social(e, ctx) { return renderers.rss(e, ctx); },
 
     // IP camera: a live MJPEG picture from the server, which reconnects by itself.
     camera(e, ctx) {
@@ -341,6 +409,293 @@
       ctx.onShow.push(() => { on = true; connect(); });
       ctx.onHide.push(() => { on = false; clearTimeout(retry); img.removeAttribute('src'); });
       if (ctx.signal) ctx.signal.addEventListener('abort', () => { on = false; clearTimeout(retry); img.removeAttribute('src'); }, { once: true });
+      return { node: b };
+    },
+
+    // A QR code for a link or text; in an RSS scene {{link}} gives a code per feed item.
+    qr(e, ctx) {
+      const b = box(e);
+      const text = fill(e.text, ctx).trim();
+      const bg = e.background || '#ffffff';
+      Object.assign(b.style, { background: bg, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: `${Number(e.padding ?? 16)}px` });
+      if (!text) { if (ctx.editor) b.appendChild(el('div', 'placeholder', 'Enter a link for the QR code')); return { node: b }; }
+      const img = el('img', 'qr-img');
+      img.alt = '';
+      img.src = `${base}/api/player/qr?${new URLSearchParams({ text, fg: e.color || '#000000', bg, margin: String(Number(e.margin ?? 1)) })}`;
+      b.appendChild(img);
+      if (e.caption) {
+        const c = el('div', 'qr-caption', fill(e.caption, ctx));
+        Object.assign(c.style, { color: e.captionColor || e.color || '#000000', fontSize: `${Number(e.fontSize) || 32}px`, fontWeight: String(e.fontWeight || 700), fontFamily: e.fontFamily || '' });
+        b.appendChild(c);
+      }
+      return { node: b };
+    },
+
+    // Counts down to a date and time, or to a time every day, then shows a closing text.
+    countdown(e, ctx) {
+      const b = box(e);
+      const w = words(ctx);
+      const wrap = el('div', `countdown cd-${e.style || 'blocks'}`);
+      Object.assign(wrap.style, { color: e.color || '#ffffff', fontSize: `${Number(e.fontSize) || 72}px`, fontFamily: e.fontFamily || '', fontWeight: String(e.fontWeight || 700) });
+      wrap.style.setProperty('--cd-accent', e.accent || 'rgba(255,255,255,0.12)');
+      b.appendChild(wrap);
+      const label = e.label ? el('div', 'cd-label', e.label) : null;
+      const body = el('div', 'cd-body');
+      wrap.append(...[label, body].filter(Boolean));
+      const units = [['days', 86400], ['hours', 3600], ['minutes', 60], ['seconds', 1]].filter(([u]) => e[`show_${u}`] !== false);
+      const target = () => {
+        if (e.mode === 'daily') {
+          const now = new Date();
+          const today = dayKey(ctx, now);
+          let t = zonedDate(`${today}T${e.time || '09:00'}`, ctx.timezone);
+          if (t && t <= now) t = zonedDate(`${dayKey(ctx, new Date(now.getTime() + 86400000))}T${e.time || '09:00'}`, ctx.timezone);
+          return t;
+        }
+        return zonedDate(e.target, ctx.timezone);
+      };
+      const tick = () => {
+        const t = target();
+        if (!t) { body.replaceChildren(el('div', 'cd-done', ctx.editor ? 'Set the date and time' : '')); return; }
+        let left = Math.max(0, Math.floor((t - Date.now()) / 1000));
+        if (left === 0 && e.mode !== 'daily') {
+          if (label && e.hideLabelWhenDone) label.style.display = 'none';
+          body.replaceChildren(el('div', 'cd-done', e.doneText || ''));
+          return;
+        }
+        if (label) label.style.display = '';
+        const parts = units.map(([u, secs], i) => {
+          const v = Math.floor(left / secs);
+          left -= v * secs;
+          return [u, v];
+        });
+        if (e.style === 'text') {
+          const [first, ...rest] = parts;
+          const big = first && first[0] === 'days' ? `${first[1]} ${w.days[first[1] === 1 ? 0 : 1]} ` : '';
+          const clock = (big ? rest : parts).map(([, v]) => String(v).padStart(2, '0')).join(':');
+          body.replaceChildren(el('div', 'cd-text', `${big}${clock}`));
+          return;
+        }
+        body.replaceChildren(...parts.map(([u, v]) => {
+          const cell = el('div', 'cd-cell');
+          cell.append(el('div', 'cd-num', u === 'days' ? String(v) : String(v).padStart(2, '0')), el('div', 'cd-unit', w[u][v === 1 ? 0 : 1]));
+          return cell;
+        }));
+      };
+      tick();
+      const iv = setInterval(tick, 1000);
+      ctx.onHide.push(() => clearInterval(iv));
+      if (ctx.signal) ctx.signal.addEventListener('abort', () => clearInterval(iv), { once: true });
+      return { node: b };
+    },
+
+    // Upcoming appointments from an iCal or Outlook calendar feed: a list by day, or now and next (room sign).
+    agenda(e, ctx) {
+      const b = box(e);
+      const w = words(ctx);
+      const wrap = el('div', `agenda agenda-${e.layout || 'list'}`);
+      Object.assign(wrap.style, { color: e.color || '#ffffff', fontFamily: e.fontFamily || '' });
+      wrap.style.setProperty('--ag-size', `${Number(e.fontSize) || 36}px`);
+      wrap.style.setProperty('--ag-accent', e.accent || '#4f8cff');
+      wrap.style.setProperty('--ag-card', e.cardBackground || 'rgba(0,0,0,0.35)');
+      b.appendChild(wrap);
+      if (!e.feedId) { if (ctx.editor) wrap.appendChild(el('div', 'placeholder', 'Choose a calendar')); return { node: b }; }
+      const time = (d) => fmtDate(ctx, d, { hour: '2-digit', minute: '2-digit' });
+      const when = (i) => {
+        if (i.allDay) return w.allDay;
+        const s = new Date(i.date);
+        const end = i.end && new Date(i.end);
+        return end && dayKey(ctx, end) === dayKey(ctx, s) ? `${time(s)} – ${time(end)}` : time(s);
+      };
+      const dayOf = (i) => (i.allDay ? i.date : dayKey(ctx, new Date(i.date)));
+      const dayTitle = (key) => {
+        const today = dayKey(ctx, new Date());
+        const diff = Math.round((Date.parse(`${key}T12:00:00Z`) - Date.parse(`${today}T12:00:00Z`)) / 86400000);
+        if (diff >= 0 && diff <= 1) {
+          try { const r = new Intl.RelativeTimeFormat(ctx.locale || 'en-GB', { numeric: 'auto' }).format(diff, 'day'); return r.charAt(0).toUpperCase() + r.slice(1); } catch { /* fall through */ }
+        }
+        return fmtDate({ ...ctx, timezone: 'UTC' }, new Date(`${key}T12:00:00Z`), { weekday: 'long', day: 'numeric', month: 'long' });
+      };
+      const row = (i, big) => {
+        const r = el('div', big ? 'ag-now' : 'ag-item');
+        r.appendChild(el('div', 'ag-time', when(i)));
+        const t = el('div', 'ag-text');
+        t.appendChild(el('div', 'ag-title', i.title));
+        if (e.showLocation !== false && i.location) t.appendChild(el('div', 'ag-loc', i.location));
+        if (e.showDescription && i.description) t.appendChild(el('div', 'ag-desc', i.description));
+        r.appendChild(t);
+        return r;
+      };
+      const draw = (items) => {
+        const now = Date.now();
+        const nodes = [];
+        if (e.title) nodes.push(el('div', 'ag-head', e.title));
+        if ((e.layout || 'list') === 'now-next') {
+          const start = (i) => (i.allDay ? zonedDate(`${i.date}T00:00`, ctx.timezone) : new Date(i.date)).getTime();
+          const current = items.find((i) => !i.allDay && start(i) <= now && (!i.end || Date.parse(i.end) > now));
+          const later = items.filter((i) => !i.allDay && start(i) > now).slice(0, Math.max(1, Number(e.maxItems) || 3));
+          const status = el('div', `ag-status ${current ? 'busy' : 'free'}`);
+          status.appendChild(el('div', 'ag-label', current ? w.now : w.free));
+          if (current) status.appendChild(row(current, true));
+          else if (later[0]) status.appendChild(el('div', 'ag-loc', `${w.until} ${time(new Date(later[0].date))}`));
+          nodes.push(status);
+          if (later.length) {
+            nodes.push(el('div', 'ag-label', w.next));
+            later.forEach((i) => nodes.push(row(i)));
+          }
+        } else {
+          const list = items.slice(0, Math.max(1, Number(e.maxItems) || 8));
+          if (!list.length) nodes.push(el('div', 'ag-empty', w.noEvents));
+          let lastDay = null;
+          for (const i of list) {
+            const d = dayOf(i);
+            if (e.groupByDay !== false && d !== lastDay) { nodes.push(el('div', 'ag-day', dayTitle(d < dayKey(ctx, new Date()) ? dayKey(ctx, new Date()) : d))); lastDay = d; }
+            nodes.push(row(i));
+          }
+        }
+        wrap.replaceChildren(...nodes);
+        // Appointments that do not fit are left off rather than cut in half, and so is a day heading without any.
+        requestAnimationFrame(() => {
+          const bottom = wrap.getBoundingClientRect().bottom + 1;
+          while (wrap.children.length > 1 && wrap.lastElementChild.getBoundingClientRect().bottom > bottom) wrap.lastElementChild.remove();
+          while (wrap.children.length > 1 && /ag-day|ag-label/.test(wrap.lastElementChild.className)) wrap.lastElementChild.remove();
+        });
+      };
+      const load = () => feedItems(e.feedId).then((d) => draw(d.items || [])).catch(() => { if (ctx.editor) wrap.replaceChildren(el('div', 'placeholder', 'Calendar unavailable')); });
+      load();
+      if (!ctx.editor) {
+        const iv = setInterval(load, 60000);
+        ctx.onHide.push(() => clearInterval(iv));
+        if (ctx.signal) ctx.signal.addEventListener('abort', () => clearInterval(iv), { once: true });
+      }
+      return { node: b };
+    },
+
+    // Live departure board for a bus, tram or metro stop or a train station.
+    departures(e, ctx) {
+      const b = box(e);
+      const w = words(ctx);
+      const wrap = el('div', e.showPlatform === false ? 'board no-plat' : 'board');
+      Object.assign(wrap.style, { color: e.color || '#ffffff', fontFamily: e.fontFamily || '' });
+      wrap.style.setProperty('--bd-size', `${Number(e.fontSize) || 36}px`);
+      wrap.style.setProperty('--bd-head', e.headBackground || '#1f3c88');
+      wrap.style.setProperty('--bd-stripe', e.stripe || 'rgba(255,255,255,0.06)');
+      wrap.style.setProperty('--bd-late', e.lateColor || '#ff6b6b');
+      b.appendChild(wrap);
+      if (!e.stopId) { if (ctx.editor) wrap.appendChild(el('div', 'placeholder', 'Choose a stop or station')); return { node: b }; }
+      const mode = e.timeFormat || 'relative';
+      let data = null;
+      const draw = () => {
+        const nodes = [];
+        if (e.showTitle !== false) {
+          const head = el('div', 'bd-title');
+          head.append(el('span', '', e.title || (data && data.stop) || e.stopName || ''), el('span', 'bd-clock', fmtDate(ctx, new Date(), { hour: '2-digit', minute: '2-digit' })));
+          nodes.push(head);
+        }
+        const cols = el('div', 'bd-row bd-cols');
+        cols.append(el('div', 'bd-time', w.departure), el('div', 'bd-line', w.line), el('div', 'bd-dest', w.destination), e.showPlatform !== false ? el('div', 'bd-plat', w.platform) : null);
+        if (e.showHeader !== false) nodes.push(cols);
+        const rows = (data && data.departures) || [];
+        if (data && !rows.length) nodes.push(el('div', 'bd-empty', w.noDepartures));
+        for (const d of rows.slice(0, Math.max(1, Number(e.maxRows) || 8))) {
+          const r = el('div', `bd-row${d.cancelled ? ' cancelled' : ''}`);
+          const t = el('div', 'bd-time');
+          const at = new Date(d.time);
+          const mins = Math.round((at - Date.now()) / 60000);
+          const clock = fmtDate(ctx, new Date(d.planned || d.time), { hour: '2-digit', minute: '2-digit' });
+          if (mode === 'relative' && mins < 60) t.textContent = mins <= 0 ? w.due : `${mins} ${w.min}`;
+          else t.textContent = clock;
+          if (mode !== 'relative' && d.delay > 0 && !d.cancelled) t.appendChild(el('span', 'bd-delay', ` +${d.delay}`));
+          const line = el('div', 'bd-line');
+          const badge = el('span', `bd-badge bd-${d.mode}`, d.line || '');
+          if (d.color) Object.assign(badge.style, { background: d.color, color: d.textColor || '#ffffff' });
+          line.appendChild(badge);
+          const dest = el('div', 'bd-dest', d.destination);
+          if (d.cancelled) dest.appendChild(el('span', 'bd-note', w.cancelled));
+          r.append(t, line, dest);
+          if (e.showPlatform !== false) r.appendChild(el('div', `bd-plat${d.platformChanged ? ' changed' : ''}`, d.platform || ''));
+          nodes.push(r);
+        }
+        wrap.replaceChildren(...nodes);
+      };
+      const load = async () => {
+        try {
+          data = await getJSON(`/api/player/departures?${new URLSearchParams({ stop: e.stopId, n: String(Math.max(1, Number(e.maxRows) || 8)), modes: (e.modes || []).join(',') })}`);
+        } catch { if (!data) data = { departures: [], stop: e.stopName }; }
+        draw();
+      };
+      load();
+      if (ctx.thumb) return { node: b };
+      const iv = setInterval(load, 30000);
+      const redraw = setInterval(() => data && draw(), 10000);
+      const stop = () => { clearInterval(iv); clearInterval(redraw); };
+      ctx.onHide.push(stop);
+      if (ctx.signal) ctx.signal.addEventListener('abort', stop, { once: true });
+      return { node: b };
+    },
+
+    // A live stream: YouTube, Twitch, HLS (.m3u8) or a direct video address. Reconnects by itself.
+    livestream(e, ctx) {
+      const b = box(e);
+      b.style.background = '#000';
+      const src = streamSource(e.url);
+      if (!src) { if (ctx.editor) b.appendChild(el('div', 'placeholder', 'Enter the address of the live stream')); return { node: b }; }
+      const label = { youtube: 'YouTube', twitch: 'Twitch', hls: 'HLS', video: 'Video' }[src.kind];
+      if (ctx.editor) {
+        if (src.kind === 'youtube' && src.id) {
+          const img = el('img', 'fill fit-cover');
+          img.src = `https://img.youtube.com/vi/${src.id}/hqdefault.jpg`;
+          img.onerror = () => img.remove();
+          b.appendChild(img);
+        } else b.appendChild(el('div', 'placeholder', `${label} live stream`));
+        if (!ctx.thumb) b.appendChild(badge(`Live stream · ${label}`));
+        return { node: b };
+      }
+      const muted = !e.audio;
+      if (src.kind === 'youtube' || src.kind === 'twitch') {
+        const f = el('iframe', 'fill');
+        f.allow = 'autoplay; encrypted-media';
+        f.setAttribute('scrolling', 'no');
+        const yt = new URLSearchParams({ autoplay: '1', mute: muted ? '1' : '0', controls: '0', rel: '0', playsinline: '1', modestbranding: '1', iv_load_policy: '3' });
+        if (src.id) { yt.set('loop', '1'); yt.set('playlist', src.id); }
+        if (src.channel && src.kind === 'youtube') yt.set('channel', src.channel);
+        const url = src.kind === 'twitch'
+          ? `https://player.twitch.tv/?${new URLSearchParams({ channel: src.channel, parent: location.hostname || 'localhost', muted: String(muted), autoplay: 'true' })}`
+          : `https://www.youtube-nocookie.com/embed/${src.id || 'live_stream'}?${yt}`;
+        ctx.onShow.push(() => { f.src = url; });
+        ctx.onHide.push(() => f.removeAttribute('src'));
+        b.appendChild(f);
+        return { node: b };
+      }
+      const v = el('video', `fill fit-${e.fit || 'contain'}`);
+      Object.assign(v, { playsInline: true, muted, autoplay: true });
+      b.appendChild(v);
+      let on = false;
+      let hls = null;
+      let retry;
+      const reconnect = () => { clearTimeout(retry); if (on) retry = setTimeout(start, 5000); };
+      const play = () => v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
+      async function start() {
+        if (!on) return;
+        if (hls) { hls.destroy(); hls = null; }
+        if (src.kind === 'hls' && !v.canPlayType('application/vnd.apple.mpegurl')) {
+          try { await loadScript(`${base}/player/vendor/hls.min.js`); } catch { reconnect(); return; }
+          if (!on) return;
+          hls = new window.Hls({ liveDurationInfinity: true, lowLatencyMode: false });
+          hls.on(window.Hls.Events.ERROR, (ev, err) => { if (err.fatal) reconnect(); });
+          hls.on(window.Hls.Events.MANIFEST_PARSED, play);
+          hls.loadSource(src.url);
+          hls.attachMedia(v);
+        } else {
+          v.src = src.url;
+          play();
+        }
+      }
+      v.addEventListener('error', reconnect);
+      v.addEventListener('ended', reconnect);
+      const stop = () => { on = false; clearTimeout(retry); if (hls) { hls.destroy(); hls = null; } v.pause(); v.removeAttribute('src'); v.load(); };
+      ctx.onShow.push(() => { on = true; start(); });
+      ctx.onHide.push(stop);
+      if (ctx.signal) ctx.signal.addEventListener('abort', stop, { once: true });
       return { node: b };
     },
 
@@ -497,5 +852,5 @@
     };
   }
 
-  window.Beeldkrant = { base, renderSlide, renderElement, feedItems, getJSON, sleep, fill };
+  window.Beeldkrant = { base, renderSlide, renderElement, feedItems, getJSON, sleep, fill, zonedDate, streamSource };
 })();

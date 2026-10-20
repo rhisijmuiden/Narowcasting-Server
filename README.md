@@ -123,7 +123,7 @@ The dashboard shows what is on air: the playout, any playouts routed to their ow
 
 ### The scene editor
 
-The top bar switches between *Scenes*, *Overlays* and *Playout settings*, and holds *Preview*, *Clone* and *Save* (or Ctrl+S); "Unsaved changes" shows until you save. Add elements with the buttons above the canvas, grouped in *Text and info* (text, ticker, clock, weather, RSS feed), *Media* (image, video, photo carousel, video carousel, IP camera) and *Other* (box, web page). The scene list shows a thumbnail of every scene with a switch to turn it off; the layer list shows the elements of the scene, with an eye to hide one and a lock to stop it moving.
+The top bar switches between *Scenes*, *Overlays* and *Playout settings*, and holds *Preview*, *Clone* and *Save* (or Ctrl+S); "Unsaved changes" shows until you save. Add elements with the buttons above the canvas, grouped in *Text and info* (text, ticker, clock, countdown, weather, RSS feed), *Media* (image, video, photo carousel, video carousel, IP camera, live stream), *Live data* (agenda, departures, social feed, QR code) and *Other* (box, web page). The scene list shows a thumbnail of every scene with a switch to turn it off; the layer list shows the elements of the scene, with an eye to hide one and a lock to stop it moving.
 
 **Photo carousel** shows several photos in one place, one after another. Choose the time per photo, the transition (fade, slide left, slide up, zoom or cut) and the order: *In this order* or *Random*. *Add photos* opens the media folders, where you tick several photos at once; change the order by dragging the rows or with the arrows. **Video carousel** does the same with videos: they play back to back in your order or at random, with or without sound, and the editor shows their total length.
 
@@ -144,6 +144,34 @@ The top bar switches between *Scenes*, *Overlays* and *Playout settings*, and ho
   <img src="docs/screenshots/player-rss-single.png" alt="One RSS item at a time on air" width="32%">
 </p>
 
+### Live data: agenda, departures, social media, countdown, QR code and live streams
+
+**Agenda** shows the upcoming appointments of a calendar feed (see [Feeds](#media)): as a *list by day* with *Today*, *Tomorrow* and the dates as headings, or as *Now and next*, a room sign that turns red with the current meeting and green when the room is free, with the next appointments below. Choose how many appointments show, whether the place and description show, and the colours. Appointments that do not fit are left off rather than cut in half, and private Outlook appointments show as "Private appointment".
+
+**Departures** is a live departure board for a train station or a bus, tram or metro stop, with the line in its own colour, the destination, the platform, delays (*+3*), platform changes (in red) and cancelled trips. Search the stop by name in the editor, tick which kinds of transport to show and pick *Minutes to go* or *Clock time with delay*. The times come from [Transitous](https://transitous.org): free, no key, with live data for all public transport in the Netherlands and much of Europe. They refresh every 30 seconds and include the other platforms of the same station. Another [MOTIS](https://github.com/motis-project/motis) server can be set under *Settings → Application → Data sources*.
+
+<p>
+  <img src="docs/screenshots/player-agenda.png" alt="Agenda as a list by day next to a room sign with Now and Next" width="49%">
+  <img src="docs/screenshots/player-departures.png" alt="Departure board for Utrecht Centraal with delays, a platform change and a cancelled bus" width="49%">
+</p>
+<p>
+  <img src="docs/screenshots/editor-agenda.png" alt="Agenda element selected in the editor, with the calendar, layout and options" width="49%">
+  <img src="docs/screenshots/editor-departures.png" alt="Searching a stop for a new departure board" width="49%">
+</p>
+
+**Social feed** shows the newest posts of an Instagram or Facebook feed with their photos and captions: *one post at a time* with the photo filling the element, a *grid of cards* or a *list*. Videos show their cover picture.
+
+**Countdown** counts down to a date and time and then shows a closing text, or counts down to a time every day (for example "Doors open in"). Show it as blocks with units or as one line, and choose which units show. **QR code** turns a link or text into a code in your own colours, with a caption. In an RSS scene `{{link}}` gives a code for every feed item.
+
+<p>
+  <img src="docs/screenshots/player-social.png" alt="Instagram posts: one at a time and as a grid" width="49%">
+  <img src="docs/screenshots/player-countdown-qr.png" alt="A countdown in blocks next to a QR code with a caption" width="49%">
+</p>
+
+**Live stream** plays a YouTube video or live stream (a video address, or a channel address for its current live stream), a Twitch channel, an HLS stream (`.m3u8`) or a direct video address, with or without sound. It reconnects by itself when the stream drops. The editor shows a still. For RTSP, RTMP and RTP cameras use the IP camera element. An HLS stream from another site has to allow playback on other sites (CORS).
+
+The texts on countdowns, agendas and departure boards ("days", "Today", "Platform", …) follow the date language under *Settings → Application* (English, Dutch, German or French).
+
 **Clone** (in the list and in the editor) makes a full copy of a playout: every scene, overlay, ad block and the music. Use it for a variant, such as a clean feed without overlays or ads, and route that copy to its own output.
 
 ![Clone dialog: name the copy](docs/screenshots/playout-clone.png)
@@ -156,10 +184,10 @@ The top bar switches between *Scenes*, *Overlays* and *Playout settings*, and ho
 | Video | mp4 (H.264), webm, mov, mkv |
 | Audio | mp3, m4a, aac, ogg, wav, flac |
 | Input streams | Shoutcast/Icecast audio streams (Media management → *Input streams*) |
-| RSS / Atom | Media management → *RSS feeds* |
+| Feeds | RSS / Atom, iCal calendars, Outlook / Exchange calendars, Instagram and Facebook (Media management → *Feeds*) |
 | IP cameras | RTSP, RTMP, RTMPS and RTP (Media management → *IP cameras*) |
 
-*Media management* opens with an overview of everything you have: files and folders, video, audio, ads, RSS feeds and input streams. Keep media tidy in **folders**: create folders (and subfolders) under *Media folders*, upload straight into the folder you have open, and move files by dragging them onto a folder or a breadcrumb, or with *Move*. Deleting a folder keeps its files: they move up one level. The media pickers in the scene editor browse the same folders and can search all of them. *Video*, *Audio* and *Ads* list those files across all folders. Mark a file as an ad (commercial) with its *Ad* button, or upload under *Ads* to mark new files straight away.
+*Media management* opens with an overview of everything you have: files and folders, video, audio, ads, feeds and input streams. Keep media tidy in **folders**: create folders (and subfolders) under *Media folders*, upload straight into the folder you have open, and move files by dragging them onto a folder or a breadcrumb, or with *Move*. Deleting a folder keeps its files: they move up one level. The media pickers in the scene editor browse the same folders and can search all of them. *Video*, *Audio* and *Ads* list those files across all folders. Mark a file as an ad (commercial) with its *Ad* button, or upload under *Ads* to mark new files straight away.
 
 **Uploading**: choose or drop as many files as you like. A panel at the bottom right lists every file with its own progress bar, speed and time left, plus the total; files go up three at a time, and you can cancel or retry each one. The panel stays while you move to other pages, so you can keep working.
 
@@ -176,11 +204,24 @@ The top bar switches between *Scenes*, *Overlays* and *Playout settings*, and ho
   <img src="docs/screenshots/media-ads.png" alt="Ads: files marked as commercials" width="49%">
 </p>
 
-*RSS feeds* lists the feeds that RSS elements, RSS scenes and tickers use. Set per feed how many of the newest items go round (*Number of items*, 10 by default); *Test feed* shows them with their photos. *Input streams* lists the Icecast/Shoutcast streams, lets you listen to them and shows which playouts use them as background music.
+*Feeds* lists the feeds that RSS, agenda and social elements, RSS scenes and tickers use. Every feed has a type:
+
+| Type | What you enter |
+| --- | --- |
+| RSS or Atom | The feed address. |
+| Calendar: iCal link | The `.ics` address of a calendar. Google Calendar: *Settings → the calendar → Secret address in iCal format*. Outlook: *Settings → Calendar → Shared calendars → Publish a calendar → ICS*. Repeating appointments and exceptions are included. |
+| Calendar: Outlook / Exchange | The e-mail address of a mailbox or a room. Uses the Entra app under *Users and roles → Configure SSO* (SSO itself may stay off); give that app the Microsoft Graph **application** permission `Calendars.Read` with admin consent. |
+| Instagram | An access token of an Instagram professional (business or creator) account: in your Meta app add *Instagram API with Instagram login*, add the account and click *Generate token*. Beeldkrant renews the token by itself while the feed is in use, and never shows it again in the panel. |
+| Facebook page | A Facebook account linked under *Outputs* and one of its pages. |
+
+Set per feed how many of the newest items go round (*Number of items*, 10 by default) and, for a calendar, how many days ahead it looks (14 by default). *Save and test* shows the items with their photos or times. Every type also works in tickers and as an RSS scene template. *Input streams* lists the Icecast/Shoutcast streams, lets you listen to them and shows which playouts use them as background music.
 
 <p>
-  <img src="docs/screenshots/rss-feed-edit.png" alt="Editing a feed: number of items and a preview with photos" width="49%">
-  <img src="docs/screenshots/rss-feeds.png" alt="RSS feeds" width="49%">
+  <img src="docs/screenshots/rss-feed-edit.png" alt="Editing an RSS feed: type, number of items and a preview with photos" width="49%">
+  <img src="docs/screenshots/feeds.png" alt="Feeds: RSS, an iCal calendar, an Outlook room and Instagram" width="49%">
+</p>
+<p>
+  <img src="docs/screenshots/feed-outlook.png" alt="An Outlook room calendar with its appointments after Save and test" width="49%">
 </p>
 <p>
   <img src="docs/screenshots/input-streams.png" alt="Icecast/Shoutcast input streams" width="49%">
@@ -308,7 +349,7 @@ On first start Beeldkrant creates the user `admin` with a random one-time passwo
 Under *Settings → Users and roles* (admins only) you add, edit, disable and remove users. Every user has one of three roles:
 
 - **Admin** can do everything, including users, SSO, security and backups.
-- **User** can only change the parts you switch on for that person: *Playouts and scenes*, *Media, RSS feeds, input streams and IP cameras*, *Schedule*, *Outputs, routing and starting or stopping the stream*, *Application settings* and *Backups and restore*. Everything else is visible but read only.
+- **User** can only change the parts you switch on for that person: *Playouts and scenes*, *Media, feeds, input streams and IP cameras*, *Schedule*, *Outputs, routing and starting or stopping the stream*, *Application settings* and *Backups and restore*. Everything else is visible but read only.
 - **Read only** can look at everything in the system but change nothing (a banner says so); only their own theme, password and MFA.
 
 Beeldkrant always keeps at least one admin, and you cannot demote or remove yourself. Accounts from older versions are moved over automatically: `editor` becomes *User* with everything except settings and backups, `viewer` becomes *Read only*.
@@ -422,7 +463,7 @@ public/player/                 Player page and the shared scene renderer
 ## Notes
 
 - The installer downloads from this repository, so the repository must be public (or point `COMMUNITY_SCRIPTS_URL` and `BEELDKRANT_REPO` at a reachable copy).
-- Weather comes from [Open-Meteo](https://open-meteo.com) and needs internet access from the container; RSS feeds and audio streams too.
+- Weather comes from [Open-Meteo](https://open-meteo.com) and departure times from [Transitous](https://transitous.org); they need internet access from the container, and so do feeds, live streams and audio streams.
 - Some websites refuse to be shown inside another page, so not every URL works as a web page element.
 
 ## License

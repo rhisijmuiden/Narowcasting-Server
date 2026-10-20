@@ -2,6 +2,23 @@
 
 All notable changes to Beeldkrant. The admin panel shows this file under the Info button.
 
+## 0.10.0 (2026-10-20)
+
+### Added
+- Six new elements for scenes, in a new *Live data* group of the editor toolbar and in *Media*:
+  - **Agenda**: upcoming appointments from a calendar, as a list by day (Today, Tomorrow, …) or as *Now and next*, a room sign that shows whether a room is free or busy.
+  - **Departures**: a live departure board for a train station or a bus, tram or metro stop, with delays, platform changes and cancelled trips. Search the stop by name in the editor; times come from [Transitous](https://transitous.org) (free, live times for the Netherlands and much of Europe), or from another MOTIS server under *Settings → Application → Data sources*.
+  - **Social feed**: the newest Instagram or Facebook posts with their photos, one at a time, as a grid or as a list.
+  - **Live stream**: a YouTube video or channel, a Twitch channel, an HLS stream (`.m3u8`) or a direct video address, live on air. It reconnects by itself.
+  - **Countdown**: counts down to a date and time (then shows a closing text) or to a time every day, as blocks with units or as one line.
+  - **QR code**: a scannable code for a link or text, in your own colours with a caption. In an RSS scene `{{link}}` gives a code for every feed item.
+- *RSS feeds* is now **Feeds**, with a type per feed: RSS or Atom, an iCal calendar link (Google Calendar, Outlook and others, repeating appointments included), an Outlook / Exchange mailbox or room through Microsoft Graph (uses the Entra app; needs the `Calendars.Read` application permission), an Instagram professional account or a Facebook page of a linked Facebook account. Every type also works in tickers, RSS elements and scene templates.
+- *Save and test* in the feed dialog also works for a new feed.
+- Countdown, agenda and departure board texts follow the date language under *Settings → Application* (English, Dutch, German or French).
+
+### Security
+- Instagram access tokens never go back to the browser; Beeldkrant renews them by itself while the feed is in use. Private Outlook appointments show as "Private appointment", without their place or text.
+
 ## 0.9.0 (2026-10-18)
 
 ### Added
